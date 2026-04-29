@@ -14,7 +14,7 @@ from pyinfra.api import FactBase
 from pyinfra.facts import hardware
 from pyinfra.facts.files import Sha256File
 from pyinfra.facts.systemd import SystemdEnabled
-from pyinfra.operations import apt, files, pip, server, systemd
+from pyinfra.operations import apt, dnf, files, pip, server, systemd
 
 from cmdeploy.cmdeploy import Out
 
@@ -25,8 +25,10 @@ from .basedeploy import (
     activate_remote_units,
     blocked_service_startup,
     configure_remote_units,
+    get_pkg_mgr,
     get_resource,
     has_systemd,
+    is_el10,
     is_in_container,
 )
 from .dovecot.deployer import DovecotDeployer
@@ -89,10 +91,11 @@ def _install_remote_venv_with_chatmaild() -> None:
     remote_dist_file = f"{remote_base_dir}/dist/{dist_file.name}"
     remote_venv_dir = f"{remote_base_dir}/venv"
     root_owned = dict(user="root", group="root", mode="644")
+    pkg_mgr = get_pkg_mgr()
 
-    apt.packages(
-        name="apt install python3-virtualenv",
-        packages=["python3-virtualenv"],
+    pkg_mgr.packages(
+        name=f"{pkg_mgr.__name__.split('.')[-1]} install python3-virtualenv",
+        packages=["python3-virtualenv" if not is_el10() else "python3-devel"],
     )
 
     files.put(
@@ -109,9 +112,9 @@ def _install_remote_venv_with_chatmaild() -> None:
         always_copy=True,
     )
 
-    apt.packages(
+    pkg_mgr.packages(
         name="install gcc and headers to build crypt_r source package",
-        packages=["gcc", "python3-dev"],
+        packages=["gcc", "python3-dev" if not is_el10() else "python3-devel"],
     )
 
     server.shell(
@@ -152,20 +155,22 @@ class UnboundDeployer(Deployer):
     def install(self):
         # On an IPv4-only system, if unbound is started but not configured,
         # it causes subsequent steps to fail to resolve hosts.
+        pkg_mgr = get_pkg_mgr()
         with blocked_service_startup():
-            apt.packages(
+            pkg_mgr.packages(
                 name="Install unbound",
-                packages=["unbound", "unbound-anchor", "dnsutils"],
+                packages=["unbound", "unbound-anchor" if not is_el10() else "unbound", "dnsutils" if not is_el10() else "bind-utils"],
             )
 
     def configure(self):
         # Remove dynamic resolver managers that compete for /etc/resolv.conf.
-        apt.packages(
-            name="Purge resolvconf",
-            packages=["resolvconf"],
-            present=False,
-            extra_uninstall_args="--purge",
-        )
+        if not is_el10():
+            apt.packages(
+                name="Purge resolvconf",
+                packages=["resolvconf"],
+                present=False,
+                extra_uninstall_args="--purge",
+            )
         # systemd-resolved can't be purged due to dependencies; stop and mask.
         server.shell(
             name="Stop and mask systemd-resolved",
@@ -284,7 +289,8 @@ class WebsiteDeployer(Deployer):
 
 class LegacyRemoveDeployer(Deployer):
     def install(self):
-        apt.packages(name="Remove rspamd", packages="rspamd", present=False)
+        pkg_mgr = get_pkg_mgr()
+        pkg_mgr.packages(name="Remove rspamd", packages="rspamd", present=False)
 
         # remove historic expunge script
         # which is now implemented through a systemd timer (chatmail-expire)
@@ -485,23 +491,25 @@ class ChatmailDeployer(Deployer):
         self.mail_domain = config.mail_domain
 
     def install(self):
-        files.put(
-            name="Disable installing recommended packages globally",
-            src=BytesIO(b'APT::Install-Recommends "false";\n'),
-            dest="/etc/apt/apt.conf.d/00InstallRecommends",
-            user="root",
-            group="root",
-            mode="644",
-        )
-        apt.update(name="apt update", cache_time=24 * 3600)
-        apt.upgrade(name="upgrade apt packages", auto_remove=True)
+        pkg_mgr = get_pkg_mgr()
+        if not is_el10():
+            files.put(
+                name="Disable installing recommended packages globally",
+                src=BytesIO(b'APT::Install-Recommends "false";\n'),
+                dest="/etc/apt/apt.conf.d/00InstallRecommends",
+                user="root",
+                group="root",
+                mode="644",
+            )
+            apt.update(name="apt update", cache_time=24 * 3600)
+            apt.upgrade(name="upgrade apt packages", auto_remove=True)
 
-        apt.packages(
+        pkg_mgr.packages(
             name="Install curl",
             packages=["curl"],
         )
 
-        apt.packages(
+        pkg_mgr.packages(
             name="Install rsync",
             packages=["rsync"],
         )
@@ -529,7 +537,8 @@ class ChatmailDeployer(Deployer):
 
 class FcgiwrapDeployer(Deployer):
     def install(self):
-        apt.packages(
+        pkg_mgr = get_pkg_mgr()
+        pkg_mgr.packages(
             name="Install fcgiwrap",
             packages=["fcgiwrap"],
         )

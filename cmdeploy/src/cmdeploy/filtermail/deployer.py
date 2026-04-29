@@ -1,7 +1,7 @@
 from pyinfra import facts, host
-from pyinfra.operations import files, systemd
+from pyinfra.operations import apt, dnf, files, systemd
 
-from cmdeploy.basedeploy import Deployer, get_resource
+from cmdeploy.basedeploy import Deployer, get_pkg_mgr, get_resource, is_el10
 
 
 class FiltermailDeployer(Deployer):

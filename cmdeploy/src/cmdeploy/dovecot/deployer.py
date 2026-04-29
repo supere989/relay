@@ -12,7 +12,9 @@ from cmdeploy.basedeploy import (
     activate_remote_units,
     blocked_service_startup,
     configure_remote_units,
+    get_pkg_mgr,
     get_resource,
+    is_el10,
     is_in_container,
 )
 
@@ -28,6 +30,9 @@ DOVECOT_SHA256 = {
     ("lmtpd", "arm64"): "89f52fb36524f5877a177dff4a713ba771fd3f91f22ed0af7238d495e143b38f",
 }
 
+PLUGIN_RPM_URL = "https://github.com/supere989/dovecot-el10-plugins/releases/download/v1.0.0/dovecot-el10-lua-plugins-2.3.21-9.el10.el10.x86_64.rpm"
+PLUGIN_RPM_SHA256 = "0ba9a9f81c5fbd6d824ad8215b4881053ad284ef649f7b038cb7cdb2998e24d1"
+
 
 class DovecotDeployer(Deployer):
     daemon_reload = False
@@ -39,6 +44,27 @@ class DovecotDeployer(Deployer):
 
     def install(self):
         arch = host.get_fact(Arch)
+        pkg_mgr = get_pkg_mgr()
+
+        if is_el10():
+            pkg_mgr.packages(
+                name="Install Dovecot and dependencies on EL10",
+                packages=["dovecot", "dovecot-pigeonhole", "dovecot-lua", "lua"],
+            )
+            rpm_path = f"/root/{PLUGIN_RPM_URL.split('/')[-1]}"
+            files.download(
+                name="Download custom Dovecot EL10 plugins",
+                src=PLUGIN_RPM_URL,
+                dest=rpm_path,
+                sha256sum=PLUGIN_RPM_SHA256,
+            )
+            server.shell(
+                name="Install custom Dovecot EL10 plugins",
+                commands=[f"dnf -y install {rpm_path}"],
+            )
+            self.need_restart = True
+            return
+
         with blocked_service_startup():
             debs = []
             for pkg in ("core", "imapd", "lmtpd"):

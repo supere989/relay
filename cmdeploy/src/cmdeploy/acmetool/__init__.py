@@ -1,8 +1,8 @@
 import importlib.resources
 
-from pyinfra.operations import apt, files, server, systemd
+from pyinfra.operations import apt, dnf, files, server, systemd
 
-from ..basedeploy import Deployer
+from ..basedeploy import Deployer, get_pkg_mgr, is_el10
 
 
 class AcmetoolDeployer(Deployer):
@@ -14,10 +14,20 @@ class AcmetoolDeployer(Deployer):
         self.need_restart_reconcile_timer = False
 
     def install(self):
-        apt.packages(
-            name="Install acmetool",
-            packages=["acmetool"],
-        )
+        pkg_mgr = get_pkg_mgr()
+        if is_el10():
+            # acmetool is not in standard EL10 repos, download binary or use custom RPM
+            # For now, we assume it's available via some other means or we download it.
+            # Using standard packages for now, which might fail if not in EPEL/other repo.
+            pkg_mgr.packages(
+                name="Install acmetool",
+                packages=["acmetool"],
+            )
+        else:
+            apt.packages(
+                name="Install acmetool",
+                packages=["acmetool"],
+            )
 
         files.file(
             name="Remove old acmetool cronjob, it is replaced with systemd timer.",

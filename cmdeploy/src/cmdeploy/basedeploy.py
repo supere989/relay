@@ -4,13 +4,30 @@ import os
 from contextlib import contextmanager
 
 from pyinfra import host
-from pyinfra.facts.server import Command
-from pyinfra.operations import files, server, systemd
+from pyinfra.facts.server import Command, LinuxDistribution
+from pyinfra.operations import apt, dnf, files, server, systemd
 
 
 def has_systemd():
     """Returns False during Docker image builds or any other non-systemd environment."""
     return os.path.isdir("/run/systemd/system")
+
+
+def get_pkg_mgr():
+    """Returns the correct package manager operation module."""
+    distro = host.get_fact(LinuxDistribution)
+    name = distro.get("name", "")
+    if any(x in name for x in ["Debian", "Ubuntu"]):
+        return apt
+    return dnf
+
+
+def is_el10():
+    """Returns True if the target is an Enterprise Linux 10 based system."""
+    distro = host.get_fact(LinuxDistribution)
+    name = distro.get("name", "")
+    major = str(distro.get("major", ""))
+    return any(x in name for x in ["AlmaLinux", "CentOS", "RedHat"]) and major == "10"
 
 
 def is_in_container() -> bool:

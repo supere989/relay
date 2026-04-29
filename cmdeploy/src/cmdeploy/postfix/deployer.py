@@ -1,6 +1,6 @@
-from pyinfra.operations import apt, files, server, systemd
+from pyinfra.operations import apt, dnf, files, server, systemd
 
-from cmdeploy.basedeploy import Deployer, get_resource
+from cmdeploy.basedeploy import Deployer, get_pkg_mgr, get_resource, is_el10
 
 
 class PostfixDeployer(Deployer):
@@ -12,9 +12,13 @@ class PostfixDeployer(Deployer):
         self.disable_mail = disable_mail
 
     def install(self):
-        apt.packages(
+        pkg_mgr = get_pkg_mgr()
+        packages = ["postfix"]
+        if is_el10():
+            packages.append("postfix-pcre")
+        pkg_mgr.packages(
             name="Install Postfix",
-            packages="postfix",
+            packages=packages,
         )
 
     def configure(self):

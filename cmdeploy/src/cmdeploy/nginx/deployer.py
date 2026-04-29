@@ -1,9 +1,11 @@
 from chatmaild.config import Config
-from pyinfra.operations import apt, files, systemd
+from pyinfra.operations import apt, dnf, files, systemd
 
 from cmdeploy.basedeploy import (
     Deployer,
+    get_pkg_mgr,
     get_resource,
+    is_el10,
 )
 
 
@@ -12,6 +14,7 @@ class NginxDeployer(Deployer):
         self.config = config
 
     def install(self):
+        pkg_mgr = get_pkg_mgr()
         #
         # If we allow nginx to start up on install, it will grab port
         # 80, which then will block acmetool from listening on the port.
@@ -31,20 +34,26 @@ class NginxDeployer(Deployer):
         # For documentation about policy-rc.d, see:
         # https://people.debian.org/~hmh/invokerc.d-policyrc.d-specification.txt
         #
-        files.put(
-            src=get_resource("policy-rc.d"),
-            dest="/usr/sbin/policy-rc.d",
-            user="root",
-            group="root",
-            mode="755",
-        )
+        if not is_el10():
+            files.put(
+                src=get_resource("policy-rc.d"),
+                dest="/usr/sbin/policy-rc.d",
+                user="root",
+                group="root",
+                mode="755",
+            )
 
-        apt.packages(
+        packages = ["nginx", "libnginx-mod-stream"]
+        if is_el10():
+            packages = ["nginx", "nginx-all-modules"]
+
+        pkg_mgr.packages(
             name="Install nginx",
-            packages=["nginx", "libnginx-mod-stream"],
+            packages=packages,
         )
 
-        files.file("/usr/sbin/policy-rc.d", present=False)
+        if not is_el10():
+            files.file("/usr/sbin/policy-rc.d", present=False)
 
     def configure(self):
         self.need_restart = _configure_nginx(self.config)
