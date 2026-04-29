@@ -242,6 +242,22 @@ def test_requeue_removes_tmp_files(notifier, metadata, testaddr, caplog):
     assert queue_item.addr == testaddr
 
 
+def test_requeue_removes_invalid_files(notifier, metadata, testaddr, caplog):
+    metadata.add_token_to_addr(testaddr, "01234")
+    notifier.new_message_for_addr(testaddr, metadata)
+    # empty/invalid files should be ignored
+    p = notifier.queue_dir.joinpath("1203981203")
+    p.touch()
+    notifier2 = notifier.__class__(notifier.queue_dir)
+    notifier2.requeue_persistent_queue_items()
+    assert "spurious" in caplog.records[0].msg
+    assert not p.exists()
+    assert notifier2.retry_queues[0].qsize() == 1
+    when, queue_item = notifier2.retry_queues[0].get()
+    assert when <= int(time.time())
+    assert queue_item.addr == testaddr
+
+
 def test_start_and_stop_notification_threads(notifier, testaddr):
     threads = notifier.start_notification_threads(None)
     for retry_num, threadlist in threads.items():
@@ -296,6 +312,51 @@ def test_persistent_queue_items(tmp_path, testaddr, token):
     item2.delete()
     assert not item2.path.exists()
     assert not queue_item < item2 and not item2 < queue_item
+
+
+def test_turn_credentials_exception_returns_N(notifier, metadata, monkeypatch):
+    """Test that turn_credentials() failure returns N\\n instead of crashing."""
+    import chatmaild.metadata
+
+    dictproxy = MetadataDictProxy(
+        notifier=notifier,
+        metadata=metadata,
+        turn_hostname="turn.example.org",
+    )
+
+    def mock_turn_credentials():
+        raise ConnectionRefusedError("socket not available")
+
+    monkeypatch.setattr(chatmaild.metadata, "turn_credentials", mock_turn_credentials)
+
+    transactions = {}
+    res = dictproxy.handle_dovecot_request(
+        "Lshared/0123/vendor/vendor.dovecot/pvt/server/vendor/deltachat/turn"
+        "\tuser@example.org",
+        transactions,
+    )
+    assert res == "N\n"
+
+
+def test_turn_credentials_success(notifier, metadata, monkeypatch):
+    """Test that valid turn_credentials() returns TURN URI."""
+    import chatmaild.metadata
+
+    dictproxy = MetadataDictProxy(
+        notifier=notifier,
+        metadata=metadata,
+        turn_hostname="turn.example.org",
+    )
+
+    monkeypatch.setattr(chatmaild.metadata, "turn_credentials", lambda: "user:pass")
+
+    transactions = {}
+    res = dictproxy.handle_dovecot_request(
+        "Lshared/0123/vendor/vendor.dovecot/pvt/server/vendor/deltachat/turn"
+        "\tuser@example.org",
+        transactions,
+    )
+    assert res == "Oturn.example.org:3478:user:pass\n"
 
 
 def test_iroh_relay(dictproxy):

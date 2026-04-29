@@ -1,5 +1,5 @@
 import queue
-import socket
+import smtplib
 import threading
 
 import pytest
@@ -89,22 +89,27 @@ def test_concurrent_logins_same_account(
         assert login_results.get()
 
 
-def test_no_vrfy(chatmail_config):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((chatmail_config.mail_domain, 25))
-    banner = sock.recv(1024)
-    print(banner)
-    sock.send(b"VRFY wrongaddress@%s\r\n" % (chatmail_config.mail_domain.encode(),))
-    result = sock.recv(1024)
+def test_no_vrfy(cmfactory, chatmail_config):
+    ac = cmfactory.get_online_account()
+    addr = ac.get_config("addr")
+    domain = chatmail_config.mail_domain
+
+    s = smtplib.SMTP(domain)
+    s.starttls()
+
+    s.putcmd("vrfy", f"wrongaddress@{chatmail_config.mail_domain}")
+    result = s.getreply()
     print(result)
-    sock.send(b"VRFY echo@%s\r\n" % (chatmail_config.mail_domain.encode(),))
-    result2 = sock.recv(1024)
+    s.putcmd("vrfy", addr)
+    result2 = s.getreply()
     print(result2)
-    assert result[0:10] == result2[0:10]
-    sock.send(b"VRFY wrongaddress\r\n")
-    result = sock.recv(1024)
+    assert result[0] == result2[0] == 252
+    assert result[1][0:6] == result2[1][0:6] == b"2.0.0 "
+    s.putcmd("vrfy", "wrongaddress")
+    result = s.getreply()
     print(result)
-    sock.send(b"VRFY echo\r\n")
-    result2 = sock.recv(1024)
+    s.putcmd("vrfy", "echo")
+    result2 = s.getreply()
     print(result2)
-    assert result[0:10] == result2[0:10] == b"252 2.0.0 "
+    assert result[0] == result2[0] == 252
+    assert result[1][0:6] == result2[1][0:6] == b"2.0.0 "

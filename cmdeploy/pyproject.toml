@@ -10,7 +10,6 @@ dependencies = [
   "pillow",
   "qrcode",
   "markdown",
-  "pytest",
   "setuptools>=68",
   "termcolor",
   "build",
@@ -20,6 +19,8 @@ dependencies = [
   "pytest-xdist", 
   "execnet",
   "imap_tools",
+  "deltachat-rpc-client",
+  "deltachat-rpc-server",
 ]
 
 [project.scripts]
@@ -40,4 +41,7 @@ lint.select = [
   "PLC", # Pylint Convention
   "PLE", # Pylint Error
   "PLW", # Pylint Warning
+]
+lint.ignore = [
+  "PLC0415" # import-outside-top-level
 ]

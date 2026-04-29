@@ -1,0 +1,169 @@
+import importlib.resources
+import io
+import os
+from contextlib import contextmanager
+
+from pyinfra import host
+from pyinfra.facts.server import Command, LinuxDistribution
+from pyinfra.operations import apt, dnf, files, server, systemd
+
+
+def has_systemd():
+    """Returns False during Docker image builds or any other non-systemd environment."""
+    return os.path.isdir("/run/systemd/system")
+
+
+def get_pkg_mgr():
+    """Returns the correct package manager operation module."""
+    distro = host.get_fact(LinuxDistribution)
+    name = distro.get("name", "")
+    if any(x in name for x in ["Debian", "Ubuntu"]):
+        return apt
+    return dnf
+
+
+def is_el10():
+    """Returns True if the target is an Enterprise Linux 10 based system."""
+    distro = host.get_fact(LinuxDistribution)
+    name = distro.get("name", "")
+    major = str(distro.get("major", ""))
+    return any(x in name for x in ["AlmaLinux", "CentOS", "RedHat"]) and major == "10"
+
+
+def is_in_container() -> bool:
+    """Return True if running inside a container (Docker, LXC, etc.)."""
+    return (
+        host.get_fact(
+            Command,
+            "systemd-detect-virt --container --quiet 2>/dev/null && echo yes || true",
+        )
+        == "yes"
+    )
+
+
+@contextmanager
+def blocked_service_startup():
+    """Prevent services from auto-starting during package installation.
+
+    Installs a ``/usr/sbin/policy-rc.d`` that exits 101, blocking any
+    service from being started by the package manager.  This avoids bind
+    conflicts and CPU/RAM spikes during initial setup.  The file is removed
+    when the context exits.
+    """
+    # For documentation about policy-rc.d, see:
+    # https://people.debian.org/~hmh/invokerc.d-policyrc.d-specification.txt
+    files.put(
+        src=get_resource("policy-rc.d"),
+        dest="/usr/sbin/policy-rc.d",
+        user="root",
+        group="root",
+        mode="755",
+    )
+    yield
+    files.file("/usr/sbin/policy-rc.d", present=False)
+
+
+def get_resource(arg, pkg=__package__):
+    return importlib.resources.files(pkg).joinpath(arg)
+
+
+def configure_remote_units(mail_domain, units) -> None:
+    remote_base_dir = "/usr/local/lib/chatmaild"
+    remote_venv_dir = f"{remote_base_dir}/venv"
+    remote_chatmail_inipath = f"{remote_base_dir}/chatmail.ini"
+    root_owned = dict(user="root", group="root", mode="644")
+
+    # install systemd units
+    for fn in units:
+        params = dict(
+            execpath=f"{remote_venv_dir}/bin/{fn}",
+            config_path=remote_chatmail_inipath,
+            remote_venv_dir=remote_venv_dir,
+            mail_domain=mail_domain,
+        )
+
+        basename = fn if "." in fn else f"{fn}.service"
+
+        source_path = get_resource(f"service/{basename}.f")
+        content = source_path.read_text().format(**params).encode()
+
+        files.put(
+            name=f"Upload {basename}",
+            src=io.BytesIO(content),
+            dest=f"/etc/systemd/system/{basename}",
+            **root_owned,
+        )
+
+
+def activate_remote_units(units) -> None:
+    # activate systemd units
+    for fn in units:
+        basename = fn if "." in fn else f"{fn}.service"
+
+        if fn == "chatmail-expire" or fn == "chatmail-fsreport":
+            # don't auto-start but let the corresponding timer trigger execution
+            enabled = False
+        else:
+            enabled = True
+        systemd.service(
+            name=f"Setup {basename}",
+            service=basename,
+            running=enabled,
+            enabled=enabled,
+            restarted=enabled,
+            daemon_reload=True,
+        )
+
+
+class Deployment:
+    def install(self, deployer):
+        # optional 'required_users' contains a list of (user, group, secondary-group-list) tuples.
+        # If the group is None, no group is created corresponding to that user.
+        # If the secondary group list is not None, all listed groups are created as well.
+        required_users = getattr(deployer, "required_users", [])
+        for user, group, groups in required_users:
+            if group is not None:
+                server.group(
+                    name="Create {} group".format(group), group=group, system=True
+                )
+            if groups is not None:
+                for group2 in groups:
+                    server.group(
+                        name="Create {} group".format(group2), group=group2, system=True
+                    )
+            server.user(
+                name="Create {} user".format(user),
+                user=user,
+                group=group,
+                groups=groups,
+                system=True,
+            )
+
+        deployer.install()
+
+    def configure(self, deployer):
+        deployer.configure()
+
+    def activate(self, deployer):
+        deployer.activate()
+
+    def perform_stages(self, deployers):
+        default_stages = "install,configure,activate"
+        stages = os.getenv("CMDEPLOY_STAGES", default_stages).split(",")
+
+        for stage in stages:
+            for deployer in deployers:
+                getattr(self, stage)(deployer)
+
+
+class Deployer:
+    need_restart = False
+
+    def install(self):
+        pass
+
+    def configure(self):
+        pass
+
+    def activate(self):
+        pass

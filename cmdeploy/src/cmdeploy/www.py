@@ -1,14 +1,20 @@
 import hashlib
 import importlib.resources
+import re
 import time
 import traceback
 import webbrowser
+from pathlib import Path
 
 import markdown
 from chatmaild.config import read_config
 from jinja2 import Template
 
 from .genqr import gen_qr_png_data
+
+_MERGE_CONFLICT_RE = re.compile(
+    r"^<<<<<<<.+^=======.+^>>>>>>>", re.DOTALL | re.MULTILINE
+)
 
 
 def snapshot_dir_stats(somedir):
@@ -30,9 +36,25 @@ def prepare_template(source):
     return render_vars, page_layout
 
 
-def build_webpages(src_dir, build_dir, config):
+def get_paths(config) -> (Path, Path, Path):
+    reporoot = importlib.resources.files(__package__).joinpath("../../../").resolve()
+    www_path = Path(config.www_folder)
+    # if www_folder was not set, use default directory
+    if config.www_folder == "":
+        www_path = reporoot.joinpath("www")
+    src_dir = www_path.joinpath("src")
+    # if www_folder is a hugo page, build it
+    if src_dir.joinpath("index.md").is_file():
+        build_dir = www_path.joinpath("build")
+    # if it is not a hugo page, upload it as is
+    else:
+        build_dir = None
+    return www_path, src_dir, build_dir
+
+
+def build_webpages(src_dir, build_dir, config) -> Path:
     try:
-        _build_webpages(src_dir, build_dir, config)
+        return _build_webpages(src_dir, build_dir, config)
     except Exception:
         print(traceback.format_exc())
 
@@ -99,6 +121,17 @@ def _build_webpages(src_dir, build_dir, config):
     return build_dir
 
 
+def find_merge_conflict(src_dir) -> Path:
+    assert src_dir.exists(), src_dir
+    result = None
+    for path in src_dir.iterdir():
+        if path.suffix in [".css", ".html", ".md"]:
+            if _MERGE_CONFLICT_RE.search(path.read_text()):
+                result = path
+                break
+    return result
+
+
 def main():
     path = importlib.resources.files(__package__)
     reporoot = path.joinpath("../../../").resolve()
@@ -106,39 +139,35 @@ def main():
     config = read_config(inipath)
     config.webdev = True
     assert config.mail_domain
-    www_path = reporoot.joinpath("www")
-    src_path = www_path.joinpath("src")
-    stats = None
-    build_dir = www_path.joinpath("build")
-    src_dir = www_path.joinpath("src")
+
+    www_path, src_path, build_dir = get_paths(config)
+    build_dir = build_webpages(src_path, build_dir, config)
     index_path = build_dir.joinpath("index.html")
-
-    # start web page generation, open a browser and wait for changes
-    build_webpages(src_dir, build_dir, config)
     webbrowser.open(str(index_path))
-    stats = snapshot_dir_stats(src_path)
+
     print(f"\nOpened URL: file://{index_path.resolve()}\n")
-    print(f"watching {src_path} directory for changes")
+    print(f"Watching {src_path} directory for changes...")
 
+    stats = snapshot_dir_stats(src_path)
     changenum = 0
-    count = 0
+    debounce_time = 0.5  # wait 0.5s after detecting a change
+
     while True:
+        time.sleep(1)
         newstats = snapshot_dir_stats(src_path)
-        if newstats == stats and count % 60 != 0:
-            count += 1
-            time.sleep(1.0)
-            continue
 
-        for key in newstats:
-            if stats[key] != newstats[key]:
-                print(f"*** CHANGED: {key}")
-                changenum += 1
+        if newstats != stats:
+            changed_files = [f for f in newstats if stats.get(f) != newstats[f]]
+            for f in changed_files:
+                print(f"*** CHANGED: {f}")
 
-        stats = newstats
-        build_webpages(src_dir, build_dir, config)
-        print(f"[{changenum}] regenerated web pages at: {index_path}")
-        print(f"URL: file://{index_path.resolve()}\n\n")
-        count = 0
+            stats = newstats
+            changenum += 1
+            build_webpages(src_path, build_dir, config)
+            print(f"[{changenum}] regenerated web pages at: {index_path}")
+            print(f"URL: file://{index_path.resolve()}\n\n")
+
+            time.sleep(debounce_time)  # simple debounce
 
 
 if __name__ == "__main__":

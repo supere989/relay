@@ -4,12 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chatmaild"
-version = "0.2"
+version = "0.3"
 dependencies = [
-  "aiosmtpd",
   "iniconfig",
-  "deltachat-rpc-server",
-  "deltachat-rpc-client",
   "filelock",
   "requests",
   "crypt-r >= 3.13.1 ; python_version >= '3.11'",
@@ -24,11 +21,11 @@ where = ['src']
 [project.scripts]
 doveauth = "chatmaild.doveauth:main"
 chatmail-metadata = "chatmaild.metadata:main"
-filtermail = "chatmaild.filtermail:main"
-echobot = "chatmaild.echo:main"
-chatmail-metrics = "chatmaild.metrics:main"
-delete_inactive_users = "chatmaild.delete_inactive_users:main"
+chatmail-expire = "chatmaild.expire:daily_expire_main"
+chatmail-quota-expire = "chatmaild.expire:quota_expire_main"
+chatmail-fsreport = "chatmaild.fsreport:main"
 lastlogin = "chatmaild.lastlogin:main"
+turnserver = "chatmaild.turnserver:main"
 
 [project.entry-points.pytest11]
 "chatmaild.testplugin" = "chatmaild.tests.plugin"
@@ -47,6 +44,9 @@ lint.select = [
   "PLC", # Pylint Convention
   "PLE", # Pylint Error
   "PLW", # Pylint Warning
+]
+lint.ignore = [
+  "PLC0415" # import-outside-top-level
 ]
 
 [tool.tox]
@@ -67,5 +67,8 @@ commands =
 [testenv]
 deps = pytest 
        pdbpp 
+       pytest-localserver
+       aiosmtpd
+       execnet
 commands = pytest -v -rsXx {posargs}
 """

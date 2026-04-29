@@ -5,7 +5,6 @@ along with command line option and subcommand parsing.
 
 import argparse
 import importlib.resources
-import importlib.util
 import os
 import pathlib
 import shutil
@@ -19,7 +18,7 @@ from packaging import version
 from termcolor import colored
 
 from . import dns, remote
-from .sshexec import SSHExec
+from .sshexec import LocalExec, SSHExec
 
 #
 # cmdeploy sub commands and options
@@ -32,17 +31,30 @@ def init_cmd_options(parser):
         action="store",
         help="fully qualified DNS domain name for your chatmail instance",
     )
+    parser.add_argument(
+        "--force",
+        dest="recreate_ini",
+        action="store_true",
+        help="force reacreate ini file",
+    )
 
 
 def init_cmd(args, out):
     """Initialize chatmail config file."""
     mail_domain = args.chatmail_domain
+    inipath = args.inipath
     if args.inipath.exists():
-        print(f"Path exists, not modifying: {args.inipath}")
-        return 1
-    else:
-        write_initial_config(args.inipath, mail_domain, overrides={})
-        out.green(f"created config file for {mail_domain} in {args.inipath}")
+        if not args.recreate_ini:
+            print(f"[WARNING] Path exists, not modifying: {inipath}")
+            return 1
+        else:
+            print(
+                f"[WARNING] Force argument was provided, deleting config file: {inipath}"
+            )
+            inipath.unlink()
+
+    write_initial_config(inipath, mail_domain, overrides={})
+    out.green(f"created config file for {mail_domain} in {inipath}")
 
 
 def run_cmd_options(parser):
@@ -59,43 +71,60 @@ def run_cmd_options(parser):
         help="install/upgrade the server, but disable postfix & dovecot for now",
     )
     parser.add_argument(
-        "--ssh-host",
-        dest="ssh_host",
-        help="specify an SSH host to deploy to; uses mail_domain from chatmail.ini by default",
+        "--website-only",
+        action="store_true",
+        help="only update/deploy the website, skipping full server upgrade/deployment, useful when you only changed/updated the web pages and don't need to re-run a full server upgrade",
     )
+    parser.add_argument(
+        "--skip-dns-check",
+        dest="dns_check_disabled",
+        action="store_true",
+        help="disable checks nslookup for dns",
+    )
+    add_ssh_host_option(parser)
 
 
 def run_cmd(args, out):
     """Deploy chatmail services on the remote server."""
 
-    sshexec = args.get_sshexec()
+    ssh_host = args.ssh_host if args.ssh_host else args.config.mail_domain
+    sshexec = get_sshexec(ssh_host)
     require_iroh = args.config.enable_iroh_relay
-    remote_data = dns.get_initial_remote_data(sshexec, args.config.mail_domain)
-    if not dns.check_initial_remote_data(remote_data, print=out.red):
-        return 1
+    strict_tls = args.config.tls_cert_mode == "acme"
+    if not args.dns_check_disabled:
+        remote_data = dns.get_initial_remote_data(sshexec, args.config.mail_domain)
+        if not dns.check_initial_remote_data(remote_data, strict_tls=strict_tls, print=out.red):
+            return 1
 
     env = os.environ.copy()
     env["CHATMAIL_INI"] = args.inipath
+    env["CHATMAIL_WEBSITE_ONLY"] = "True" if args.website_only else ""
     env["CHATMAIL_DISABLE_MAIL"] = "True" if args.disable_mail else ""
     env["CHATMAIL_REQUIRE_IROH"] = "True" if require_iroh else ""
-    deploy_path = importlib.resources.files(__package__).joinpath("deploy.py").resolve()
+    deploy_path = importlib.resources.files(__package__).joinpath("run.py").resolve()
     pyinf = "pyinfra --dry" if args.dry_run else "pyinfra"
-    ssh_host = args.config.mail_domain if not args.ssh_host else args.ssh_host
+
     cmd = f"{pyinf} --ssh-user root {ssh_host} {deploy_path} -y"
+    if ssh_host == "localhost":
+        cmd = f"{pyinf} @local {deploy_path} -y"
+
     if version.parse(pyinfra.__version__) < version.parse("3"):
         out.red("Please re-run scripts/initenv.sh to update pyinfra to version 3.")
         return 1
 
-    retcode = out.check_call(cmd, env=env)
-    if retcode == 0:
-        out.green("Deploy completed, call `cmdeploy dns` next.")
-    elif not remote_data["acme_account_url"]:
-        out.red("Deploy completed but letsencrypt not configured")
-        out.red("Run 'cmdeploy run' again")
-        retcode = 0
-    else:
+    try:
+        out.check_call(cmd, env=env)
+        if args.website_only:
+            out.green("Website deployment completed.")
+        elif not args.dns_check_disabled and strict_tls and not remote_data["acme_account_url"]:
+            out.red("Deploy completed but letsencrypt not configured")
+            out.red("Run 'cmdeploy run' again")
+        else:
+            out.green("Deploy completed, call `cmdeploy dns` next.")
+        return 0
+    except subprocess.CalledProcessError:
         out.red("Deploy failed")
-    return retcode
+        return 1
 
 
 def dns_cmd_options(parser):
@@ -106,16 +135,20 @@ def dns_cmd_options(parser):
         default=None,
         help="write out a zonefile",
     )
+    add_ssh_host_option(parser)
 
 
 def dns_cmd(args, out):
     """Check DNS entries and optionally generate dns zone file."""
-    sshexec = args.get_sshexec()
+    ssh_host = args.ssh_host if args.ssh_host else args.config.mail_domain
+    sshexec = get_sshexec(ssh_host, verbose=args.verbose)
+    tls_cert_mode = args.config.tls_cert_mode
+    strict_tls = tls_cert_mode == "acme"
     remote_data = dns.get_initial_remote_data(sshexec, args.config.mail_domain)
-    if not remote_data:
+    if not dns.check_initial_remote_data(remote_data, strict_tls=strict_tls):
         return 1
 
-    if not remote_data["acme_account_url"]:
+    if strict_tls and not remote_data["acme_account_url"]:
         out.red("could not get letsencrypt account url, please run 'cmdeploy run'")
         return 1
 
@@ -123,6 +156,7 @@ def dns_cmd(args, out):
         out.red("could not determine dkim_entry, please run 'cmdeploy run'")
         return 1
 
+    remote_data["strict_tls"] = strict_tls
     zonefile = dns.get_filled_zone_file(remote_data)
 
     if args.zonefile:
@@ -136,10 +170,15 @@ def dns_cmd(args, out):
     return retcode
 
 
+def status_cmd_options(parser):
+    add_ssh_host_option(parser)
+
+
 def status_cmd(args, out):
     """Display status for online chatmail instance."""
 
-    sshexec = args.get_sshexec()
+    ssh_host = args.ssh_host if args.ssh_host else args.config.mail_domain
+    sshexec = get_sshexec(ssh_host, verbose=args.verbose)
 
     out.green(f"chatmail domain: {args.config.mail_domain}")
     if args.config.privacy_mail:
@@ -152,23 +191,16 @@ def status_cmd(args, out):
 
 
 def test_cmd_options(parser):
-    parser.add_argument(
-        "--slow",
-        dest="slow",
-        action="store_true",
-        help="also run slow tests",
-    )
+    add_ssh_host_option(parser)
 
 
 def test_cmd(args, out):
-    """Run local and online tests for chatmail deployment.
+    """Run local and online tests for chatmail deployment."""
 
-    This will automatically pip-install 'deltachat' if it's not available.
-    """
-
-    x = importlib.util.find_spec("deltachat")
-    if x is None:
-        out.check_call(f"{sys.executable} -m pip install deltachat")
+    env = os.environ.copy()
+    env["CHATMAIL_INI"] = str(args.inipath.absolute())
+    if args.ssh_host:
+        env["CHATMAIL_SSH"] = args.ssh_host
 
     pytest_path = shutil.which("pytest")
     pytest_args = [
@@ -180,9 +212,7 @@ def test_cmd(args, out):
         "-v",
         "--durations=5",
     ]
-    if args.slow:
-        pytest_args.append("--slow")
-    ret = out.run_ret(pytest_args)
+    ret = out.run_ret(pytest_args, env=env)
     return ret
 
 
@@ -198,7 +228,12 @@ def fmt_cmd_options(parser):
 def fmt_cmd(args, out):
     """Run formattting fixes on all chatmail source code."""
 
-    sources = [str(importlib.resources.files(x)) for x in ("chatmaild", "cmdeploy")]
+    chatmaild_dir = importlib.resources.files("chatmaild").resolve()
+    cmdeploy_dir = chatmaild_dir.joinpath(
+        "..", "..", "..", "cmdeploy", "src", "cmdeploy"
+    ).resolve()
+    sources = [str(chatmaild_dir), str(cmdeploy_dir)]
+
     format_args = [shutil.which("ruff"), "format"]
     check_args = [shutil.which("ruff"), "check"]
 
@@ -264,12 +299,21 @@ class Out:
         return proc.returncode
 
 
+def add_ssh_host_option(parser):
+    parser.add_argument(
+        "--ssh-host",
+        dest="ssh_host",
+        help="Run commands on 'localhost' or on a specific SSH host "
+        "instead of chatmail.ini's mail_domain.",
+    )
+
+
 def add_config_option(parser):
     parser.add_argument(
         "--config",
         dest="inipath",
         action="store",
-        default=Path("chatmail.ini"),
+        default=Path(os.environ.get("CHATMAIL_INI", "chatmail.ini")),
         type=Path,
         help="path to the chatmail.ini file",
     )
@@ -319,18 +363,20 @@ def get_parser():
     return parser
 
 
+def get_sshexec(ssh_host: str, verbose=True):
+    if ssh_host in ["localhost", "@local"]:
+        return LocalExec(verbose)
+    if verbose:
+        print(f"[ssh] login to {ssh_host}")
+    return SSHExec(ssh_host, verbose=verbose)
+
+
 def main(args=None):
     """Provide main entry point for 'cmdeploy' CLI invocation."""
     parser = get_parser()
     args = parser.parse_args(args=args)
     if not hasattr(args, "func"):
         return parser.parse_args(["-h"])
-
-    def get_sshexec():
-        print(f"[ssh] login to {args.config.mail_domain}")
-        return SSHExec(args.config.mail_domain, verbose=args.verbose)
-
-    args.get_sshexec = get_sshexec
 
     out = Out()
     kwargs = {}
