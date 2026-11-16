@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "policy": {"maximum_evidence_age_days": 7},
+  "relay_source": {
+    "upstream": "https://github.com/chatmail/relay",
+    "release": "1.13.0",
+    "oid": "4ffb501c5e15e4c2d9a801f4baff1d214ce1fbed",
+    "preserved_el10_branch_oid": "f6e7d162f9697733d23a941200de00b9ee6df18b"
+  },
+  "profiles": {
+    "upstream-2.4.5-alma10-x86_64": {
+      "id": "upstream-2.4.5-alma10-x86_64",
+      "runtime_kind": "bundled-upstream",
+      "os": "almalinux", "os_major": "10", "architecture": "x86_64",
+      "relay_oid": "4ffb501c5e15e4c2d9a801f4baff1d214ce1fbed",
+      "chatmaild_version": "0.3", "config_auth_contract": "relay113-lua-http-auth",
+      "runtime": {
+        "version": "2.4.5", "prefix": "/opt/chatmail-dovecot/2.4.5",
+        "config_version": "2.4.5", "storage_version": "2.4.5",
+        "source_archives": {
+          "core": "868c2686a61b5f8e00a3e4721789b1ab46e6528fd773a5fbed07a6ecba7731e6",
+          "pigeonhole": "ad7c478cb3aaa76c5f81f86727a3e6843645b0a1253f5684fb8a0beec0d22925"
+        },
+        "source_signer": "EF0882079FD4ED32BF8B23B2A1B09EF84EDC5219"
+      },
+      "source_dispositions_sha256": "565cb1a2a6dbe399f73018ef82223625e91dcf69da995c842a861819798fe40c",
+      "required_modules": ["libauthdb_lua.so", "lib01_mail_lua_plugin.so", "lib20_push_notification_plugin.so", "lib22_push_notification_lua_plugin.so", "lib90_sieve_plugin.so"],
+      "promotion": {"approved": false},
+      "unresolved": ["full EL10 deployment package/service/SELinux acceptance is separate from the isolated native runtime", "production storage transition and post-write rollback require operator review", "legacy updater must be migrated before production publication"]
+    },
+    "alma10-chatmail02-security-candidate": {
+      "id": "alma10-chatmail02-security-candidate",
+      "os": "almalinux", "os_major": "10", "architecture": "x86_64",
+      "relay_oid": "f6e7d162f9697733d23a941200de00b9ee6df18b",
+      "chatmaild_version": "0.2",
+      "config_auth_contract": "chatmail02-dict-auth",
+      "core": {
+        "nevra": "dovecot-1:2.3.21-19.el10_2.8.x86_64",
+        "sha256": "a0da375d5feaa8e62fd5caa6c49ff31d8a9ec152014af79e0412913d678dc211",
+        "srpm_sha256": "3a616ca16555b1de687a4d6bde5a17ac108c7fd09504a44a749bb2d7580d7de6",
+        "signer": "AlmaLinux-10:c2a1e572", "signature_verified": true
+      },
+      "pigeonhole": {
+        "nevra": "dovecot-pigeonhole-1:2.3.21-19.el10_2.8.x86_64",
+        "sha256": "ad5c2245da1c84fef4a623d2a646adae50ab0bac6fe7e3849993cfa2d5ba67a4"
+      },
+      "addon": {
+        "repository": "https://github.com/supere989/dovecot-el10-plugins",
+        "repository_oid": null, "build_manifest_sha256": null,
+        "core_nevra": "dovecot-1:2.3.21-19.el10_2.8.x86_64",
+        "core_nvr": "dovecot-2.3.21-19.el10_2.8",
+        "qualified_modules": []
+      },
+      "required_modules": ["mail_lua", "notify", "push_notification", "push_notification_lua"],
+      "promotion": {"approved": false},
+      "unresolved": ["candidate build/runtime evidence not promoted", "exact prior-state restoration not rehearsed", "legacy overwrite-based package and timer require migration"]
+    },
+    "alma10-relay113-candidate": {
+      "id": "alma10-relay113-candidate",
+      "os": "almalinux", "os_major": "10", "architecture": "x86_64",
+      "relay_oid": "4ffb501c5e15e4c2d9a801f4baff1d214ce1fbed",
+      "chatmaild_version": "0.3",
+      "config_auth_contract": "relay113-lua-http-auth",
+      "core": {
+        "nevra": "dovecot-1:2.3.21-19.el10_2.8.x86_64",
+        "sha256": "a0da375d5feaa8e62fd5caa6c49ff31d8a9ec152014af79e0412913d678dc211",
+        "srpm_sha256": "3a616ca16555b1de687a4d6bde5a17ac108c7fd09504a44a749bb2d7580d7de6",
+        "signer": "AlmaLinux-10:c2a1e572", "signature_verified": true
+      },
+      "pigeonhole": {
+        "nevra": "dovecot-pigeonhole-1:2.3.21-19.el10_2.8.x86_64",
+        "sha256": "ad5c2245da1c84fef4a623d2a646adae50ab0bac6fe7e3849993cfa2d5ba67a4"
+      },
+      "addon": {
+        "repository": "https://github.com/supere989/dovecot-el10-plugins",
+        "repository_oid": null, "build_manifest_sha256": null,
+        "core_nevra": "dovecot-1:2.3.21-19.el10_2.8.x86_64",
+        "core_nvr": "dovecot-2.3.21-19.el10_2.8",
+        "qualified_modules": []
+      },
+      "required_modules": ["authdb_lua", "mail_lua", "notify", "push_notification", "push_notification_lua"],
+      "promotion": {"approved": false},
+      "unresolved": ["Lua/HTTP authentication and provisioning migration unqualified", "legacy 0.2 notification test does not qualify relay 1.13", "acmetool and platform packages unqualified", "service startup suppression and SELinux qualification missing", "archive and rollback qualification missing"]
+    },
+    "debian-relay113-upstream-pin": {
+      "id": "debian-relay113-upstream-pin",
+      "os": "debian", "os_major": "12", "architecture": "amd64",
+      "relay_oid": "4ffb501c5e15e4c2d9a801f4baff1d214ce1fbed",
+      "config_auth_contract": "relay113-lua-http-auth",
+      "core": {"nevra": "dovecot-core:1:2.3.21+dfsg1-3:amd64", "sha256": "dd060706f52a306fa863d874717210b9fe10536c824afe1790eec247ded5b27d"},
+      "addon": {}, "required_modules": ["authdb_lua"],
+      "promotion": {"approved": false},
+      "unresolved": ["upstream Debian pin retained unchanged; current source/binary advisory coverage unverified"]
+    }
+  },
+  "captured_facts": {
+    "inventory": {
+      "package": "dovecot", "checked_at": "2026-11-15", "fetch_status": "ok",
+      "url": "https://documentation.open-xchange.com/dovecot/security/advisories/csaf/2026/oxdc-adv-2026-0003.json",
+      "required_ids": ["CVE-2026-33263", "CVE-2026-33607", "CVE-2026-27852", "CVE-2026-33606", "CVE-2026-33604", "CVE-2026-40014", "CVE-2026-40013", "CVE-2026-33605", "CVE-2026-40018", "CVE-2026-40019", "CVE-2026-40015", "CVE-2026-40017", "CVE-2026-40203", "CVE-2026-42007", "CVE-2026-40204", "CVE-2026-40205", "CVE-2026-42008", "CVE-2026-42395", "CVE-2026-42393", "CVE-2026-52681", "CVE-2026-42392", "CVE-2026-73208", "CVE-2026-73209", "CVE-2026-42391", "CVE-2026-52687"],
+      "scope": "full 25-CVE upstream disclosure; absent dispositions remain unknown"
+    },
+    "advisories": [
+      {
+        "id": "ALSA-2026:79371:core", "claim": "fixed", "scope": "identified core source patches only",
+        "covers": ["CVE-2026-33263", "CVE-2026-27852", "CVE-2026-73208", "CVE-2026-42391", "CVE-2026-40018", "CVE-2026-42007", "CVE-2026-33605"],
+        "evidence": {"checked_at": "2026-11-15", "fetch_status": "ok", "url": "https://errata.almalinux.org/10/ALSA-2026-79371.html"},
+        "source": {"srpm_sha256": "3a616ca16555b1de687a4d6bde5a17ac108c7fd09504a44a749bb2d7580d7de6", "patches": ["CVE-2026-33263", "CVE-2026-27852", "CVE-2026-73208", "CVE-2026-42391", "CVE-2026-40018", "CVE-2026-42007", "CVE-2026-33605"]},
+        "binary": {"nevra": "dovecot-1:2.3.21-19.el10_2.8.x86_64", "sha256": "a0da375d5feaa8e62fd5caa6c49ff31d8a9ec152014af79e0412913d678dc211", "signer": "AlmaLinux-10:c2a1e572", "signature_verified": true}
+      },
+      {
+        "id": "ALSA-2026:79371:CVE-2026-40019", "claim": "not-applicable",
+        "covers": ["CVE-2026-40019"],
+        "evidence": {"checked_at": "2026-11-15", "fetch_status": "ok", "url": "https://security-tracker.debian.org/tracker/CVE-2026-40019"},
+        "applicability_profiles": ["alma10-chatmail02-security-candidate", "alma10-relay113-candidate"],
+        "source_srpm_sha256": "3a616ca16555b1de687a4d6bde5a17ac108c7fd09504a44a749bb2d7580d7de6",
+        "reason": "upstream identifies a 2.4.3 regression; the reviewed 2.3.21 vendor source predates that introduced code, independently of the vendor umbrella advisory"
+      }
+    ],
+    "channels": [
+      {"project": "dovecot-ce", "selected": "2.3.21+Alma-19.el10_2.8", "latest": "2.4.5", "checked_at": "2026-11-15", "fetch_status": "ok", "url": "https://github.com/dovecot/core/releases/tag/2.4.5"},
+      {"project": "chatmail-relay", "selected": "1.13.0", "latest": "1.13.0", "checked_at": "2026-11-15", "fetch_status": "ok", "url": "https://github.com/chatmail/relay/releases/tag/1.13.0"}
+    ]
+  }
+}

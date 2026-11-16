@@ -1,0 +1,21 @@
+# Optional reference only: never start as part of mail delivery or login.
+[Unit]
+Description=Optional encrypted mailbox archive worker
+After=network.target
+
+[Service]
+Type=simple
+User=vmail
+Group=vmail
+UMask=0077
+ExecStart=/usr/local/bin/chatmail-archive --config /etc/chatmail-archive.json worker
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/chatmail-archive
+TimeoutStopSec=150
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

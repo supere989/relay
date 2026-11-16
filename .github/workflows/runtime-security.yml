@@ -1,0 +1,39 @@
+name: Runtime security intake
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: ['cmdeploy/**', '.github/workflows/runtime-security.yml']
+  schedule:
+    - cron: '20 3 * * *'
+permissions:
+  contents: read
+jobs:
+  assess:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect authoritative release and disclosure facts
+        env:
+          PYTHONPATH: cmdeploy/src
+        run: |
+          mkdir -p runtime-evidence
+          python3 -m cmdeploy.runtime_intake --output runtime-evidence/facts.json
+      - name: Report source and binary coverage
+        if: always()
+        env:
+          PYTHONPATH: cmdeploy/src
+        run: |
+          python3 -m cmdeploy.runtime_audit --facts runtime-evidence/facts.json \
+            --output runtime-evidence/report.json --summary "$GITHUB_STEP_SUMMARY" --gate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-security-evidence
+          path: runtime-evidence/
+          if-no-files-found: warn
+# Candidate package discovery/build/offline Lua tests are owned by the linked
+# dovecot-el10-plugins candidate-build workflow. Neither workflow publishes a
+# release or changes production. Intake failure remains a visible failed job.

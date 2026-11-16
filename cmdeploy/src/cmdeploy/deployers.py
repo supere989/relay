@@ -26,6 +26,9 @@ from .basedeploy import (
     configure_remote_units,
     has_systemd,
     is_in_container,
+    package_manager,
+    platform_packages,
+    require_runtime_profile,
 )
 from .dovecot.deployer import DovecotDeployer
 from .external.deployer import ExternalTlsDeployer
@@ -88,9 +91,9 @@ def _install_remote_venv_with_chatmaild(deployer) -> None:
     remote_dist_file = f"{remote_base_dir}/dist/{dist_file.name}"
     remote_venv_dir = f"{remote_base_dir}/venv"
 
-    apt.packages(
+    package_manager().packages(
         name="apt install python3-virtualenv",
-        packages=["python3-virtualenv"],
+        packages=platform_packages("python-venv"),
     )
 
     deployer.ensure_directory(f"{remote_base_dir}/dist")
@@ -105,9 +108,9 @@ def _install_remote_venv_with_chatmaild(deployer) -> None:
         always_copy=True,
     )
 
-    apt.packages(
+    package_manager().packages(
         name="install gcc and headers to build crypt_r source package",
-        packages=["gcc", "python3-dev"],
+        packages=platform_packages("python-build"),
     )
 
     server.shell(
@@ -259,7 +262,9 @@ class LegacyRemoveDeployer(Deployer):
         # unbound systemd unit copies /usr/share/dns/root.key
         # into /var/lib/unbound/root.key automatically on start
         # as long as /usr/share/dns/root.key is present.
-        apt.packages(name="Remove unbound-anchor", packages="unbound-anchor", present=False)
+        apt.packages(
+            name="Remove unbound-anchor", packages="unbound-anchor", present=False
+        )
 
         # remove historic expunge script
         # which is now implemented through a systemd timer (chatmail-expire)
@@ -476,6 +481,7 @@ def deploy_chatmail(config_path: Path, disable_mail: bool, website_only: bool) -
     :param disable_mail: whether to disable postfix & dovecot
     :param website_only: if True, only deploy the website
     """
+    require_runtime_profile()
     config = read_config(config_path)
     check_config(config)
     bare_host = config.mail_domain_bare

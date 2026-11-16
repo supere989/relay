@@ -165,6 +165,21 @@ Chatmail relay dependency diagram
         chatmail-quota-expire --- maildir;
         lastlogin --- maildir;
         doveauth --- maildir;
+        nginx-internal -. optional .-> archive-owner-portal;
+        archive-owner-portal --> archive-identity[verified Google subject];
+        archive-identity --> archive-binding[existing mailbox proof and binding];
+        archive-binding --> archive-incarnation[held mailbox incarnation];
+        archive-policy[current operator policy] -. optional delegation .-> archive-incarnation;
+        archive-incarnation --> archive-wallet[restricted wallet broker];
+        archive-wallet --> archive-operation[shared worker verify retry guard];
+        archive-operation --> archive-capture[cur/new capture and age encryption];
+        archive-binding --> archive-grant[versioned credential CAS];
+        archive-grant --> archive-wallet;
+        archive-capture --> archive-verify[Drive principal and downloaded checksum];
+        archive-verify --> archive-terminal[terminal receipt and cursor scan fence];
+        archive-terminal --> archive-quarantine[private quarantine recovery];
+        archive-capture --> archive-audit[unresolved entries and unused artifacts];
+        archive-wallet --> archive-audit;
         chatmail-expire-daily --- maildir;
         chatmail-fsreport-daily --- maildir;
         chatmail-metadata --- iroh-relay;
@@ -390,6 +405,13 @@ and run with self-signed certificates.
 
 Architecture of cmdeploy
 ------------------------
+
+The optional encrypted archive surface and its setup boundary are documented
+in :doc:`drive-archive`. It is not registered for automatic deployment.
+The downstream :doc:`runtime-maintenance` path connects primary advisory and
+release facts to the runtime lock and source/binary checks, then private
+candidate builds and offline authentication/notification tests before explicit
+promotion.
 
 cmdeploy is a Python program that uses the pyinfra library to deploy
 chatmail relays, with all the necessary software, configuration, and

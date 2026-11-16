@@ -13,11 +13,17 @@ dependencies = [
   "crypt-r >= 3.13.1 ; python_version >= '3.13'",
 ]
 
+[project.optional-dependencies]
+backup = ["google-auth>=2.40,<3"]
+
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ['src']
+
+[tool.setuptools.package-data]
+"chatmaild.backup" = ["integration/*.example"]
 
 [project.scripts]
 doveauth = "chatmaild.doveauth:main"
@@ -26,6 +32,7 @@ chatmail-expire = "chatmaild.expire:daily_expire_main"
 chatmail-quota-expire = "chatmaild.expire:quota_expire_main"
 chatmail-fsreport = "chatmaild.fsreport:main"
 lastlogin = "chatmaild.lastlogin:main"
+chatmail-archive = "chatmaild.backup.cli:main"
 
 [tool.pytest.ini_options]
 addopts = "-v -ra --strict-markers"
@@ -62,6 +69,7 @@ commands =
   ruff check src/
 
 [testenv]
+extras = backup
 deps = pytest 
        pdbpp 
        pytest-localserver

@@ -2,6 +2,7 @@ name: documentation preview
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'doc/**'
       - 'scripts/build-docs.sh'
@@ -11,6 +12,7 @@ permissions: {}
 
 jobs:
   scripts:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: build 
     runs-on: ubuntu-latest
     env:

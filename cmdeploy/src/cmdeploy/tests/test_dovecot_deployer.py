@@ -4,7 +4,14 @@ from types import SimpleNamespace
 import pytest
 from pyinfra.facts.deb import DebPackages
 
+from cmdeploy import basedeploy
 from cmdeploy.dovecot import deployer as dovecot_deployer
+from cmdeploy.platforms import DEBIAN
+
+
+@pytest.fixture(autouse=True)
+def debian_runtime(monkeypatch):
+    monkeypatch.setattr(basedeploy, "deployment_platform", lambda: DEBIAN)
 
 
 def make_host(*fact_pairs):

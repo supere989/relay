@@ -13,6 +13,7 @@ from cmdeploy.basedeploy import (
     blocked_service_startup,
     configure_remote_units,
     is_in_container,
+    require_runtime_profile,
 )
 from cmdeploy.pins import DOVECOT_SHA256, DOVECOT_VERSION
 
@@ -28,6 +29,7 @@ class DovecotDeployer(Deployer):
         self.units = []
 
     def install(self):
+        require_runtime_profile()
         arch = host.get_fact(Arch)
         with blocked_service_startup():
             debs = []
@@ -50,26 +52,24 @@ class DovecotDeployer(Deployer):
                 )
                 self.need_restart = True
         self.put_file(
-            src=io.StringIO(
-                "Package: dovecot-*\n"
-                "Pin: version *\n"
-                "Pin-Priority: -1\n"
-            ),
+            src=io.StringIO("Package: dovecot-*\nPin: version *\nPin-Priority: -1\n"),
             dest="/etc/apt/preferences.d/pin-dovecot",
         )
 
     def configure(self):
+        require_runtime_profile()
         configure_remote_units(self, self.config.mail_domain_bare, self.units)
         _configure_dovecot(self, self.config)
 
     def activate(self):
+        require_runtime_profile()
         activate_remote_units(self, self.units)
 
         # Detect stale binary: package installed but service still runs old (deleted) binary.
         if not self.disable_mail and not self.need_restart:
             stale = host.get_fact(
                 Command,
-                'pid=$(systemctl show -p MainPID --value dovecot.service 2>/dev/null);'
+                "pid=$(systemctl show -p MainPID --value dovecot.service 2>/dev/null);"
                 ' [ "${pid:-0}" != "0" ] && readlink "/proc/$pid/exe" 2>/dev/null | grep -q "(deleted)"'
                 " && echo STALE || true",
             )
@@ -124,6 +124,7 @@ def _download_dovecot_package(package: str, arch: str) -> tuple[str | None, bool
     )
 
     return deb_filename, True
+
 
 def _configure_dovecot(deployer, config: Config, debug: bool = False):
     """Configures Dovecot IMAP server."""

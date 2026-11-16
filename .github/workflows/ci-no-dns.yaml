@@ -8,6 +8,7 @@ on:
   # Triggers for any PR (and its subsequent commits) targeting the main branch
   pull_request:
     branches: [ "main" ]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions: {}
 
@@ -19,6 +20,7 @@ concurrency:
 
 jobs:
   no-dns:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: LXC deploy and test
     uses: chatmail/cmlxc/.github/workflows/lxc-test.yml@main
     with:

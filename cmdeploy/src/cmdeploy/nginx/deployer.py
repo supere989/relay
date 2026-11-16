@@ -1,9 +1,10 @@
 from chatmaild.config import Config
-from pyinfra.operations import apt
 
 from cmdeploy.basedeploy import (
     Deployer,
     get_resource,
+    package_manager,
+    platform_packages,
 )
 
 
@@ -12,6 +13,8 @@ class NginxDeployer(Deployer):
         self.config = config
 
     def install(self):
+        manager = package_manager()
+        packages = platform_packages("nginx")
         #
         # If we allow nginx to start up on install, it will grab port
         # 80, which then will block acmetool from listening on the port.
@@ -33,9 +36,9 @@ class NginxDeployer(Deployer):
         #
         self.put_executable(src="policy-rc.d", dest="/usr/sbin/policy-rc.d")
 
-        apt.packages(
+        manager.packages(
             name="Install nginx",
-            packages=["nginx", "libnginx-mod-stream"],
+            packages=packages,
         )
 
         self.remove_file("/usr/sbin/policy-rc.d")

@@ -5,8 +5,55 @@ from contextlib import contextmanager
 
 from pyinfra import host
 from pyinfra.facts.files import Sha256File
-from pyinfra.facts.server import Command
-from pyinfra.operations import files, server, systemd
+from pyinfra.facts.server import Command, LinuxDistribution
+from pyinfra.operations import apt, dnf, files, server, systemd
+
+from .platforms import package_plan, select_platform
+from .runtime_security import load_lock, require_promoted, verify_addon_manifest
+
+
+def deployment_platform():
+    return select_platform(host.get_fact(LinuxDistribution))
+
+
+def require_runtime_profile():
+    platform = deployment_platform()
+    if platform.name == "alma10":
+        lock = load_lock(os.environ.get("CMDEPLOY_RUNTIME_LOCK"))
+        profile_id = os.environ.get(
+            "CMDEPLOY_RUNTIME_PROFILE", "alma10-relay113-candidate"
+        )
+        profile = lock["profiles"].get(profile_id)
+        if (
+            not profile
+            or profile.get("os") != "almalinux"
+            or profile.get("os_major") != "10"
+        ):
+            raise RuntimeError(
+                "EL10 deployment requires a matching AlmaLinux 10 runtime profile"
+            )
+        manifest_path = os.environ.get("CMDEPLOY_ADDON_MANIFEST")
+        if manifest_path:
+            verify_addon_manifest(profile, manifest_path)
+        require_promoted(lock, profile_id, "relay113-lua-http-auth")
+        if not manifest_path:
+            raise RuntimeError(
+                "EL10 deployment requires the exact qualified addon manifest"
+            )
+        # Never route a forged/unfinished EL10 qualification into Debian ops.
+        raise RuntimeError(
+            "EL10 deployment adapter remains unqualified; no remote operations were scheduled"
+        )
+    return platform
+
+
+def package_manager():
+    platform = require_runtime_profile()
+    return apt if platform.backend == "apt" else dnf
+
+
+def platform_packages(component):
+    return package_plan(deployment_platform(), component)
 
 
 def has_systemd():
@@ -36,6 +83,10 @@ def blocked_service_startup():
     """
     # For documentation about policy-rc.d, see:
     # https://people.debian.org/~hmh/invokerc.d-policyrc.d-specification.txt
+    if deployment_platform().backend != "apt":
+        raise RuntimeError(
+            "policy-rc.d is Debian-specific; EL10 startup suppression remains unqualified"
+        )
     files.put(
         src=get_resource("policy-rc.d"),
         dest="/usr/sbin/policy-rc.d",
@@ -124,6 +175,7 @@ class Deployment:
         deployer.activate()
 
     def perform_stages(self, deployers):
+        require_runtime_profile()
         default_stages = "install,configure,activate"
         stages = os.getenv("CMDEPLOY_STAGES", default_stages).split(",")
 

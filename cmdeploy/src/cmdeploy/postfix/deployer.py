@@ -1,6 +1,6 @@
-from pyinfra.operations import apt, server
+from pyinfra.operations import server
 
-from cmdeploy.basedeploy import Deployer
+from cmdeploy.basedeploy import Deployer, package_manager, platform_packages
 
 
 class PostfixDeployer(Deployer):
@@ -11,9 +11,9 @@ class PostfixDeployer(Deployer):
         self.disable_mail = disable_mail
 
     def install(self):
-        apt.packages(
+        package_manager().packages(
             name="Install Postfix",
-            packages="postfix",
+            packages=platform_packages("postfix"),
         )
 
     def configure(self):

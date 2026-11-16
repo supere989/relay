@@ -4,9 +4,9 @@ Installs OpenDKIM
 
 from pyinfra import host
 from pyinfra.facts.files import File
-from pyinfra.operations import apt, files, server
+from pyinfra.operations import files, server
 
-from cmdeploy.basedeploy import Deployer
+from cmdeploy.basedeploy import Deployer, package_manager, platform_packages
 
 
 class OpendkimDeployer(Deployer):
@@ -16,9 +16,9 @@ class OpendkimDeployer(Deployer):
         self.mail_domain = mail_domain
 
     def install(self):
-        apt.packages(
+        package_manager().packages(
             name="apt install opendkim opendkim-tools",
-            packages=["opendkim", "opendkim-tools"],
+            packages=platform_packages("opendkim"),
         )
 
     def configure(self):

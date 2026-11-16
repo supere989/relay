@@ -1,6 +1,6 @@
-from pyinfra.operations import apt, server
+from pyinfra.operations import server
 
-from ..basedeploy import Deployer
+from ..basedeploy import Deployer, package_manager, platform_packages
 
 
 class AcmetoolDeployer(Deployer):
@@ -11,9 +11,9 @@ class AcmetoolDeployer(Deployer):
         self.email = email
 
     def install(self):
-        apt.packages(
+        package_manager().packages(
             name="Install acmetool",
-            packages=["acmetool"],
+            packages=platform_packages("acmetool"),
         )
 
         self.remove_file("/etc/cron.d/acmetool")
