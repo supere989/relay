@@ -115,6 +115,28 @@ class Portal:
         self.public_url = public_url.rstrip("/")
         self.redirect_uri = self.public_url + "/archive/callback"
         self.verify, self.drive_factory = verify, drive_factory
+        self.manager = None
+        self.audit_stalls = 0
+        self.audit_lock = threading.Lock()
+
+    def audit(self, reason, *, amount=1):
+        try:
+            self.store.event(reason, amount=amount)
+            with self.audit_lock:
+                lost = self.audit_stalls
+                self.audit_stalls = 0
+            if lost:
+                try:
+                    self.store.event("portal_ledger_unavailable", amount=lost)
+                except (ArchiveError, OSError, sqlite3.Error):
+                    with self.audit_lock:
+                        self.audit_stalls += lost
+                    raise
+        except (ArchiveError, OSError, sqlite3.Error):
+            # Mount-loss counters remain in memory only and can be lost if
+            # this process exits. Never create a fallback plaintext ledger.
+            with self.audit_lock:
+                self.audit_stalls += 1
 
     def session(self, raw=None, *, create=True):
         if raw and len(raw) <= 128:
@@ -467,6 +489,14 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == "GET":
                 if path in ("/archive", "/archive/"):
                     return self.reply(200, raw, portal.page(session))
+                if path == "/archive/manager-pair" and portal.manager is not None:
+                    return self.reply(
+                        200,
+                        raw,
+                        portal.manager.browser_page(
+                            session, self.parameters(parsed.query), portal.csrf(session)
+                        ),
+                    )
                 if path == "/archive/callback":
                     query = self.parameters(parsed.query)
                     portal.callback(session, query)
@@ -501,6 +531,22 @@ class Handler(BaseHTTPRequestHandler):
                     ).export(session, form)
                     return self.recovery_reply(raw, download)
                 portal.mutation(session, form)
+                if (
+                    path in ("/archive/manager-intent", "/archive/manager-confirm")
+                    and portal.manager is not None
+                ):
+                    if path == "/archive/manager-intent":
+                        portal.manager.browser_intent(session, form)
+                    else:
+                        portal.manager.browser_finish(session, form)
+                    return self.reply(
+                        303,
+                        raw,
+                        location="/archive/manager-pair?"
+                        + urlencode(
+                            {"challenge": form["challenge"], "token": form["token"]}
+                        ),
+                    )
                 if path == "/archive/login":
                     return self.reply(303, raw, location=portal.begin(session))
                 if not session["owner"]:
@@ -537,14 +583,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(303, raw, location="/archive/")
             self.reply(404, raw)
         except ArchiveError as exc:
-            portal.store.event(exc.reason)
+            portal.audit(exc.reason)
             self.reply(
                 400,
                 raw,
                 b"Archive action could not complete. Sign-in remains separate from Drive consent. Return to /archive/ to retry.",
             )
         except Exception:
-            portal.store.event("portal_request_failed")
+            portal.audit("portal_request_failed")
             self.reply(
                 400,
                 raw,
@@ -552,9 +598,9 @@ class Handler(BaseHTTPRequestHandler):
             )
         finally:
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            portal.store.event("portal_request_ms", amount=elapsed_ms)
+            portal.audit("portal_request_ms", amount=elapsed_ms)
             if elapsed_ms > 1000:
-                portal.store.event("portal_slow_request")
+                portal.audit("portal_slow_request")
 
     @staticmethod
     def parameters(query):

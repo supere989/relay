@@ -1,5 +1,5 @@
 Optional encrypted Google Drive archives
-=======================================
+========================================
 
 This downstream feature is optional and is **not activated by cmdeploy**.
 No current mailbox, Google account, legacy archive, service or timer is changed
@@ -263,7 +263,7 @@ explicit operator-supported recovery plan. The completion manifest records the
 provided receipt-part coverage and never asserts missing parts were supplied.
 
 Separate optional operator Drive mode
-------------------------------------
+-------------------------------------
 
 ``operator-consent --identity NAME --mailbox ADDRESS`` additionally requires the
 configured OS UID, an explicit trusted administrator identity, an exact mailbox

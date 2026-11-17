@@ -4,6 +4,7 @@ The relay may configure a restricted remote transport implementing this JSON
 contract. It must never fall back to files, ADC, or an operator Google account.
 """
 
+import base64
 import json
 import os
 import re
@@ -95,9 +96,14 @@ class Wallet:
 
     def call(self, operation, **payload):
         ref = payload.get("ref", "")
-        if operation in ("put", "get", "recovery-key", "manifest-key") and (
-            type(ref) is not str or not REF.fullmatch(ref)
-        ):
+        if operation in (
+            "put",
+            "get",
+            "recovery-key",
+            "manifest-key",
+            "manager-public",
+            "manager-sign",
+        ) and (type(ref) is not str or not REF.fullmatch(ref)):
             raise ArchiveError("invalid_credential_ref")
         if operation == "put":
             value = json.dumps(payload["value"], separators=(",", ":")).encode()
@@ -121,6 +127,64 @@ class Wallet:
                 ]
             )
             return json.loads(data)
+        if operation == "manager-storage-key":
+            ref = "manager-state-" + secrets.token_hex(24)
+            self.call(
+                "put",
+                ref=ref,
+                value={"gocryptfs_passphrase": secrets.token_urlsafe(48)},
+            )
+            return {"ref": ref}
+        if operation in ("manager-key", "manager-public", "manager-sign"):
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            if operation == "manager-key":
+                key = Ed25519PrivateKey.generate()
+                raw = key.private_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PrivateFormat.Raw,
+                    serialization.NoEncryption(),
+                )
+                ref = "manager-signing-" + secrets.token_hex(24)
+                self.call(
+                    "put",
+                    ref=ref,
+                    value={
+                        "manager_signing_key": base64.b64encode(raw).decode("ascii")
+                    },
+                )
+            else:
+                value = self.call("get", ref=ref)
+                if type(value) is not dict or set(value) != {"manager_signing_key"}:
+                    raise ArchiveError("manager_signing_key_type")
+                try:
+                    key = Ed25519PrivateKey.from_private_bytes(
+                        base64.b64decode(value["manager_signing_key"], validate=True)
+                    )
+                except (ValueError, TypeError):
+                    raise ArchiveError("manager_signing_key_invalid") from None
+            public = key.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            )
+            if operation == "manager-sign":
+                try:
+                    message = base64.b64decode(payload["message"], validate=True)
+                except (ValueError, KeyError, TypeError):
+                    raise ArchiveError("manager_signature_payload_invalid") from None
+                if len(message) > 65536 or not message.startswith(
+                    (
+                        b"chatmail-archive-manager-response/v1\0",
+                        b"chatmail-archive-manager-pair/v1\0",
+                    )
+                ):
+                    raise ArchiveError("manager_signature_payload_invalid")
+                return {
+                    "signature": base64.b64encode(key.sign(message)).decode("ascii")
+                }
+            return {"ref": ref, "public_key": base64.b64encode(public).decode("ascii")}
         if operation in ("recovery-key", "manifest-key"):
             identity = verified_identity(
                 self.call("get", ref=ref), payload.get("recipient")

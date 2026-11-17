@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import sqlite3
+import stat
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -73,9 +74,41 @@ def digest(value):
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, *, guard=None, create=True):
         self.path = Path(path)
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.guard = guard
+        self._initializing = create
+        if guard is None and self.path.is_file():
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                check = sqlite3.connect(
+                    "file:/proc/self/fd/" + str(fd) + "?mode=ro&immutable=1", uri=True
+                )
+                try:
+                    if check.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='manager_instances'"
+                    ).fetchone():
+                        raise ArchiveError("manager_state_policy_required")
+                    if (
+                        check.execute(
+                            "SELECT 1 FROM sqlite_master WHERE name='metadata'"
+                        ).fetchone()
+                        and check.execute(
+                            "SELECT 1 FROM metadata WHERE key='protected_storage_epoch'"
+                        ).fetchone()
+                    ):
+                        raise ArchiveError("manager_state_policy_required")
+                finally:
+                    check.close()
+            finally:
+                os.close(fd)
+        if guard is not None:
+            guard.check()
+            with guard.parent(self.path, create=create):
+                if not create and not self.path.is_file():
+                    raise ArchiveError("manager_state_database_missing")
+        else:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.path.resolve().parent.stat().st_uid != os.geteuid() or (
             self.path.exists() and self.path.stat().st_uid != os.geteuid()
         ):
@@ -132,25 +165,90 @@ class Store:
             db.executescript(SCHEMA)
             if db.execute("SELECT number FROM version").fetchall() != [(3,)]:
                 raise ArchiveError("unsupported_store_version")
-        os.chmod(self.path, 0o600)
+            if guard is not None:
+                previous = db.execute(
+                    "SELECT value FROM metadata WHERE key='protected_storage_epoch'"
+                ).fetchone()
+                if previous and previous[0] != guard.epoch:
+                    raise ArchiveError("manager_state_epoch_changed")
+                db.execute(
+                    "INSERT OR IGNORE INTO metadata VALUES('protected_storage_epoch',?)",
+                    (guard.epoch,),
+                )
         self.operations = self.path.resolve().parent / ".operations"
-        self.operations.mkdir(mode=0o700, exist_ok=True)
+        if guard is not None:
+            with guard.parent(self.path) as (fd, name):
+                target = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+                try:
+                    os.fchmod(target, 0o600)
+                finally:
+                    os.close(target)
+            with guard.parent(self.operations / "lock", create=True):
+                pass
+        else:
+            os.chmod(self.path, 0o600)
+            self.operations.mkdir(mode=0o700, exist_ok=True)
         if (
             self.operations.is_symlink()
             or self.operations.stat().st_mode & 0o077
             or self.operations.stat().st_uid != os.geteuid()
         ):
             raise ArchiveError("operation_directory_not_private")
+        self._initializing = False
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=2)
+        if self.guard is not None:
+            with self.guard.parent(self.path) as (fd, name):
+                mode = "rwc" if self._initializing else "rw"
+                handle = None
+                try:
+                    flags = os.O_RDWR | os.O_NOFOLLOW
+                    if self._initializing:
+                        flags |= os.O_CREAT
+                    handle = os.open(name, flags, 0o600, dir_fd=fd)
+                    info = os.fstat(handle)
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_uid != self.guard.uid
+                        or info.st_mode & 0o077
+                    ):
+                        raise ArchiveError("manager_state_database_denied")
+                    with self._connect(
+                        "file:/proc/self/fd/" + str(handle) + "?mode=" + mode, uri=True
+                    ) as db:
+                        yield db
+                except OSError:
+                    raise ArchiveError("manager_state_database_denied") from None
+                finally:
+                    if handle is not None:
+                        os.close(handle)
+        else:
+            with self._connect(self.path) as db:
+                yield db
+
+    @contextmanager
+    def _connect(self, path, *, uri=False):
+        if self.guard is not None:
+            self.guard.check()
+        db = sqlite3.connect(path, timeout=2, uri=uri)
+        flushed_refusals = 0
         try:
             db.execute("PRAGMA foreign_keys=ON")
+            db.execute("PRAGMA temp_store=MEMORY")
             db.execute("PRAGMA busy_timeout=2000")
             yield db
+            if self.guard is not None:
+                self.guard.check()
+                flushed_refusals = self.guard.take_refusals()
+                if flushed_refusals:
+                    self._ledger(db, "manager_storage_refused", amount=flushed_refusals)
             db.commit()
         except BaseException:
+            if self.guard is not None and flushed_refusals:
+                # Preserve increments after take(), and restore this batch
+                # even if rollback itself fails. RAM is not crash-durable.
+                self.guard.record_refusal(flushed_refusals)
             db.rollback()
             raise
         finally:
@@ -181,6 +279,8 @@ class Store:
         )
 
     def operation_path(self, binding_id):
+        if self.guard is not None:
+            self.guard.check()
         if (
             self.operations.stat().st_uid != os.geteuid()
             or self.path.stat().st_uid != os.geteuid()
@@ -222,7 +322,26 @@ class Store:
 
     @contextmanager
     def operation(self, binding_id, job_id=None, *, kind="worker"):
-        lock = FileLock(str(self.operation_path(binding_id)), mode=0o600)
+        if self.guard is not None:
+            self.guard.check()
+            path = self.operation_path(binding_id)
+            with self.guard.parent(path) as (fd, name):
+                with self._operation(
+                    "/proc/self/fd/" + str(fd) + "/" + name,
+                    binding_id,
+                    job_id,
+                    kind=kind,
+                ):
+                    yield
+        else:
+            with self._operation(
+                str(self.operation_path(binding_id)), binding_id, job_id, kind=kind
+            ):
+                yield
+
+    @contextmanager
+    def _operation(self, path, binding_id, job_id=None, *, kind="worker"):
+        lock = FileLock(path, mode=0o600)
         try:
             lock.acquire(timeout=0)
         except Timeout as exc:
@@ -420,25 +539,32 @@ class Store:
 
     def optout(self, binding_id, owner):
         with self.transaction() as db:
-            self.get(binding_id, owner=owner, db=db)
-            db.execute(
-                "UPDATE bindings SET enabled=0,generation=generation+1,consent='disabled',credential_ref=NULL WHERE id=?",
-                (binding_id,),
-            )
-            db.execute(
-                "UPDATE jobs SET state='paused',last_reason='binding_inactive' WHERE binding_id=? AND state!='verified'",
-                (binding_id,),
-            )
+            self.optout_in(db, binding_id, owner)
         self.event("optout", binding_id)
+
+    def optout_in(self, db, binding_id, owner):
+        """Same transition inside an already-authorized atomic facade result."""
+        self.get(binding_id, owner=owner, db=db)
+        db.execute(
+            "UPDATE bindings SET enabled=0,generation=generation+1,consent='disabled',credential_ref=NULL WHERE id=?",
+            (binding_id,),
+        )
+        db.execute(
+            "UPDATE jobs SET state='paused',last_reason='binding_inactive' WHERE binding_id=? AND state!='verified'",
+            (binding_id,),
+        )
 
     def enable(self, binding_id, owner):
         with self.transaction() as db:
-            if self.get(binding_id, owner=owner, db=db).retired:
-                raise ArchiveError("mailbox_reproof_required")
-            db.execute(
-                "UPDATE bindings SET enabled=1,consent='pending' WHERE id=? AND enabled=0",
-                (binding_id,),
-            )
+            self.enable_in(db, binding_id, owner)
+
+    def enable_in(self, db, binding_id, owner):
+        if self.get(binding_id, owner=owner, db=db).retired:
+            raise ArchiveError("mailbox_reproof_required")
+        db.execute(
+            "UPDATE bindings SET enabled=1,consent='pending' WHERE id=? AND enabled=0",
+            (binding_id,),
+        )
 
     def active(self, binding_id, generation):
         b = self.get(binding_id)
@@ -496,24 +622,33 @@ class Store:
 
     def _retry_claimed(self, job_id):
         with self.transaction() as db:
-            row = db.execute(
-                "SELECT binding_id,generation,spool,state FROM jobs WHERE id=?",
-                (job_id,),
-            ).fetchone()
-            if not row:
-                raise ArchiveError("job_missing")
-            b = self.get(row[0], db=db)
-            if not b.enabled or b.consent != "active" or b.generation != row[1]:
-                raise ArchiveError("binding_inactive")
-            if row[3] == "verified":
-                raise ArchiveError("job_already_verified")
-            changed = db.execute(
-                "UPDATE jobs SET state=?,attempt=0,due=?,updated=? WHERE id=? AND state!='verified'",
-                ("prepared" if row[2] else "queued", time.time(), time.time(), job_id),
-            )
-            if changed.rowcount != 1:
-                raise ArchiveError("job_transition_conflict")
-        self.event("job_manual_retry", b.id, job_id)
+            binding = self.retry_in(db, job_id)
+        self.event("job_manual_retry", binding, job_id)
+
+    def retry_in(self, db, job_id):
+        row = db.execute(
+            "SELECT binding_id,generation,spool,state FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            raise ArchiveError("job_missing")
+        b = self.get(row[0], db=db)
+        if (
+            b.retired
+            or not b.enabled
+            or b.consent != "active"
+            or b.generation != row[1]
+        ):
+            raise ArchiveError("binding_inactive")
+        if row[3] == "verified":
+            raise ArchiveError("job_already_verified")
+        changed = db.execute(
+            "UPDATE jobs SET state=?,attempt=0,due=?,updated=? WHERE id=? AND state!='verified'",
+            ("prepared" if row[2] else "queued", time.time(), time.time(), job_id),
+        )
+        if changed.rowcount != 1:
+            raise ArchiveError("job_transition_conflict")
+        return b.id
 
     def job(self, job_id, *, db=None):
         if db is None:
@@ -937,37 +1072,93 @@ class Store:
 
     def metrics(self):
         with self.connect() as db:
-            result = {
-                "jobs_" + state: count
-                for state, count in db.execute(
-                    "SELECT state,count(*) FROM jobs GROUP BY state"
+            return self.metrics_in(db)
+
+    @staticmethod
+    def metrics_readonly(path):
+        """Legacy bare-path snapshot: no create, migration, locks or journals.
+
+        Active journal/WAL state requires guarded configuration instead.
+        This immutable snapshot API cannot provide live-writer consistency.
+        """
+        path = Path(path).absolute()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            before = os.fstat(fd)
+            for suffix in ("-wal", "-journal"):
+                side = Path(str(path) + suffix)
+                if side.exists() and side.stat().st_size:
+                    raise ArchiveError("archive_metrics_config_required")
+            db = sqlite3.connect(
+                "file:/proc/self/fd/" + str(fd) + "?mode=ro&immutable=1", uri=True
+            )
+            try:
+                if (
+                    db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='manager_instances'"
+                    ).fetchone()
+                    or db.execute(
+                        "SELECT 1 FROM metadata WHERE key='protected_storage_epoch'"
+                    ).fetchone()
+                ):
+                    raise ArchiveError("archive_metrics_config_required")
+                result = Store.metrics_in(db)
+            finally:
+                db.close()
+            after = os.fstat(fd)
+            if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            ):
+                raise ArchiveError("archive_metrics_snapshot_changed")
+            return result
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def metrics_in(db):
+        result = {
+            "jobs_" + state: count
+            for state, count in db.execute(
+                "SELECT state,count(*) FROM jobs GROUP BY state"
+            )
+        }
+        result.update(
+            {
+                "events_" + reason: count
+                for reason, count in db.execute(
+                    "SELECT reason,sum(amount) FROM ledger GROUP BY reason"
                 )
             }
-            result.update(
-                {
-                    "events_" + reason: count
-                    for reason, count in db.execute(
-                        "SELECT reason,sum(amount) FROM ledger GROUP BY reason"
-                    )
-                }
-            )
-            result["verified_bytes"] = db.execute(
-                "SELECT coalesce(sum(size),0) FROM jobs WHERE state='verified'"
-            ).fetchone()[0]
-            result["verified_messages"] = db.execute(
-                "SELECT count(*) FROM messages"
-            ).fetchone()[0]
-            result["last_verified"] = db.execute(
-                "SELECT coalesce(max(updated),0) FROM jobs WHERE state='verified'"
-            ).fetchone()[0]
-            result["unresolved_entries"] = db.execute(
-                "SELECT count(*) FROM unresolved"
-            ).fetchone()[0]
-            result["incomplete_bindings"] = db.execute(
-                "SELECT count(DISTINCT binding_id) FROM unresolved"
-            ).fetchone()[0]
-            for state, count in db.execute(
-                "SELECT state,count(*) FROM artifacts GROUP BY state"
+        )
+        result["verified_bytes"] = db.execute(
+            "SELECT coalesce(sum(size),0) FROM jobs WHERE state='verified'"
+        ).fetchone()[0]
+        result["verified_messages"] = db.execute(
+            "SELECT count(*) FROM messages"
+        ).fetchone()[0]
+        result["last_verified"] = db.execute(
+            "SELECT coalesce(max(updated),0) FROM jobs WHERE state='verified'"
+        ).fetchone()[0]
+        result["unresolved_entries"] = db.execute(
+            "SELECT count(*) FROM unresolved"
+        ).fetchone()[0]
+        result["incomplete_bindings"] = db.execute(
+            "SELECT count(DISTINCT binding_id) FROM unresolved"
+        ).fetchone()[0]
+        for state, count in db.execute(
+            "SELECT state,count(*) FROM artifacts GROUP BY state"
+        ):
+            result["artifacts_" + state] = count
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='manager_issuance'"
+        ).fetchone():
+            for state, count, oldest in db.execute(
+                "SELECT state,count(*),min(updated) FROM manager_issuance GROUP BY state"
             ):
-                result["artifacts_" + state] = count
-            return result
+                result["manager_issuance_" + state] = count
+                result["manager_issuance_" + state + "_oldest_seconds"] = max(
+                    0, int(time.time() - oldest)
+                )
+        return result

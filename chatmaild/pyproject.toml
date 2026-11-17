@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 backup = ["google-auth>=2.40,<3"]
+manager = ["deltachat-rpc-client==2.69.0", "cryptography>=44"]
 
 [tool.setuptools]
 include-package-data = true
@@ -23,7 +24,7 @@ include-package-data = true
 where = ['src']
 
 [tool.setuptools.package-data]
-"chatmaild.backup" = ["integration/*.example"]
+"chatmaild.backup" = ["integration/*.example", "archive_manager/*", "archive_manager/vendor/*"]
 
 [project.scripts]
 doveauth = "chatmaild.doveauth:main"
@@ -33,6 +34,8 @@ chatmail-quota-expire = "chatmaild.expire:quota_expire_main"
 chatmail-fsreport = "chatmaild.fsreport:main"
 lastlogin = "chatmaild.lastlogin:main"
 chatmail-archive = "chatmaild.backup.cli:main"
+chatmail-archive-manager = "chatmaild.backup.manager:main"
+chatmail-archive-state = "chatmaild.backup.manager_profile:main"
 
 [tool.pytest.ini_options]
 addopts = "-v -ra --strict-markers"
@@ -69,7 +72,7 @@ commands =
   ruff check src/
 
 [testenv]
-extras = backup
+extras = backup,manager
 deps = pytest 
        pdbpp 
        pytest-localserver

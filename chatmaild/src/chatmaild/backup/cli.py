@@ -33,7 +33,14 @@ def load(path):
     for field in ("database", "spool", "chatmail_ini"):
         if not Path(config[field]).is_absolute():
             raise ArchiveError("config_path_must_be_absolute")
-    store = Store(config["database"])
+    if "manager" in config and not config.get("state_storage"):
+        raise ArchiveError("manager_state_policy_required")
+    guard = None
+    if config.get("state_storage"):
+        from .manager_profile import StateGuard
+
+        guard = StateGuard(config["state_storage"])
+    store = Store(config["database"], guard=guard, create=guard is None)
     broker = Broker(config["broker_argv"])
     credentials = Credentials(
         broker, config["google_client_id"], config["google_client_secret_ref"]
@@ -275,6 +282,10 @@ def main(argv=None):
             )
         elif args.command == "web":
             portal = Portal(store, relay, credentials, config["public_url"])
+            if "manager" in config:
+                from .manager import load_manager
+
+                portal.manager = load_manager(config, store, credentials, web=True)
             server = Server(("127.0.0.1", int(config.get("web_port", 10090))), portal)
             with server:
                 server.serve_forever(poll_interval=0.25)

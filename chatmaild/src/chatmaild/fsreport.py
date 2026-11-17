@@ -272,6 +272,10 @@ def main(args=None):
         default=None,
         help="Include aggregate optional archive metrics from this existing SQLite ledger",
     )
+    parser.add_argument(
+        "--archive-config",
+        help="Guarded optional archive configuration; required for Manager/shared encrypted state",
+    )
 
     args = parser.parse_args(args)
 
@@ -283,12 +287,19 @@ def main(args=None):
 
     maxnum = int(args.maxnum) if args.maxnum else None
     archive_metrics = {}
-    if args.archive_database:
+    if args.archive_database and args.archive_config:
+        parser.error("select archive-config or a legacy archive-database snapshot")
+    if args.archive_config:
+        from chatmaild.backup.cli import load
+
+        _archive_config, archive_store, _credentials = load(args.archive_config)
+        archive_metrics = archive_store.metrics()
+    elif args.archive_database:
         from chatmaild.backup.store import Store
 
         if not os.path.isfile(args.archive_database):
             parser.error("archive database must already exist")
-        archive_metrics = Store(args.archive_database).metrics()
+        archive_metrics = Store.metrics_readonly(args.archive_database)
     rep = Report(
         now=now,
         min_login_age=int(args.min_login_age),

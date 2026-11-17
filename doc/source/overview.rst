@@ -194,6 +194,32 @@ Chatmail relay dependency diagram
         archive-offline --> archive-owner-quarantine[exclusive run-ID quarantine and final completion];
         archive-capture --> archive-audit[unresolved entries and unused artifacts];
         archive-wallet --> archive-audit;
+        nginx-internal -. explicit pairing only .-> manager-pair-portal[fresh owner proof and browser final confirmation];
+        manager-state[Guarded encrypted state and RPC profile] --> manager-mount[Root attestation and kernel unique mount identity];
+        manager-mount --> manager-sdk[Official RPC 2.69 child];
+        manager-sdk --> manager-peer[Protected Single chat and SecureJoin key pin];
+        manager-peer --> manager-pending[Atomic peer pin and durable pending issuance];
+        manager-pending --> manager-claim[Reserved instance and exclusive claim];
+        manager-claim --> manager-issuer[One background issuance worker];
+        manager-issuer --> manager-sdk;
+        manager-issuer --> manager-register[Fresh context and atomic registration];
+        manager-register --> manager-instance[Registered outgoing Archive Manager app];
+        manager-issuer -. ambiguous outcome .-> manager-uncertain[Uncertain issuance without automatic resend];
+        manager-uncertain --> manager-reissue[Explicit offline replacement and retained history];
+        manager-reissue --> manager-claim;
+        manager-instance --> manager-ui[Packaged local Webxdc controls];
+        manager-ui --> manager-queue[SDK stable update queue];
+        manager-queue --> manager-peer;
+        manager-pair-portal --> manager-intent[Purpose leased app intent];
+        manager-intent --> manager-pair-portal;
+        manager-pair-portal --> manager-link[Explicit personal binding link];
+        manager-peer --> manager-link;
+        manager-link --> manager-facade[Revision and lease guarded archive facade];
+        manager-facade --> archive-operation;
+        manager-facade --> manager-signed[Exact byte signed outbox];
+        manager-signed --> manager-verifier[Packaged NaCl verification worker];
+        manager-verifier --> manager-ui;
+        manager-facade --> archive-audit;
         chatmail-expire-daily --- maildir;
         chatmail-fsreport-daily --- maildir;
         chatmail-metadata --- iroh-relay;
@@ -422,6 +448,19 @@ Architecture of cmdeploy
 
 The optional encrypted archive surface and its setup boundary are documented
 in :doc:`drive-archive`. It is not registered for automatic deployment.
+The optional :doc:`archive-manager` adds a service conversation and locally
+packaged Webxdc controls in ordinary supported Delta Chat clients. Its stable
+update queue reaches the existing owner facade and background worker through
+protected-chat, key-pin, app-instance, personal-link and purpose-lease checks.
+Completed SecureJoin events create durable issuance work. One background worker
+uses the existing supervised core, then commits app registration and the issued
+outcome together. Interrupted claims remain uncertain until explicit recovery;
+profile ownership prevents an offline issuance command from opening a second
+core beside the daemon. Issuance state counts and pending age use the existing
+metrics surface, and replacement history remains in the existing audit path.
+Browser pairing/Google consent and private recovery remain separate handoffs.
+Only the packaged verification worker can promote a signed response to current
+UI state; stale history and messaging acceptance are not committed outcomes.
 Personal owners may privately retain an exported recovery kit and recover
 downloaded message archives using standalone Python and age tooling, without
 the operator's running relay, database or wallet. The operator still retains
