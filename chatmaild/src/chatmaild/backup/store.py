@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS artifacts (
  kind TEXT NOT NULL, reference TEXT NOT NULL, binding_id TEXT NOT NULL,
  generation INTEGER NOT NULL, state TEXT NOT NULL, updated REAL NOT NULL,
  PRIMARY KEY(kind,reference));
+CREATE TABLE IF NOT EXISTS recovery_receipts (
+ seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id),
+ binding_id TEXT NOT NULL REFERENCES bindings(id), key_ref TEXT NOT NULL,
+ recipient TEXT NOT NULL, file_id TEXT, size INTEGER NOT NULL,
+ sha256 TEXT NOT NULL, generation INTEGER NOT NULL, observed_state TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS recovery_receipts_binding ON recovery_receipts(binding_id,seq);
+CREATE INDEX IF NOT EXISTS jobs_binding ON jobs(binding_id);
+CREATE TABLE IF NOT EXISTS recovery_snapshots (
+ id TEXT PRIMARY KEY, binding_id TEXT NOT NULL REFERENCES bindings(id), owner TEXT NOT NULL,
+ generation INTEGER NOT NULL, incarnation TEXT NOT NULL, high_water INTEGER NOT NULL,
+ total INTEGER NOT NULL, refs_json TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL);
 """
 
 
@@ -184,6 +195,30 @@ class Store:
         ):
             raise ArchiveError("operation_lock_owner_mismatch")
         return path
+
+    def recovery_catalog(self, db, binding_id):
+        """Append immutable nonsecret receipt pins; never infer archive format."""
+        conflict = db.execute(
+            """SELECT 1 FROM recovery_receipts r JOIN jobs j ON j.id=r.job_id
+          WHERE r.binding_id=? AND (j.binding_id IS NOT r.binding_id OR j.key_ref IS NOT r.key_ref
+          OR j.recipient IS NOT r.recipient OR (r.file_id IS NOT NULL AND j.file_id IS NOT r.file_id) OR j.size IS NOT r.size
+          OR j.sha256 IS NOT r.sha256 OR j.generation IS NOT r.generation) LIMIT 1""",
+            (binding_id,),
+        ).fetchone()
+        if conflict:
+            raise ArchiveError("recovery_catalog_conflict")
+        db.execute(
+            """INSERT INTO recovery_receipts(job_id,binding_id,key_ref,recipient,file_id,size,sha256,generation,observed_state)
+          SELECT id,binding_id,key_ref,recipient,file_id,size,sha256,generation,state FROM jobs j
+          WHERE binding_id=? AND (file_id IS NOT NULL OR spool IS NOT NULL) AND key_ref IS NOT NULL AND recipient IS NOT NULL
+          AND size IS NOT NULL AND sha256 IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM recovery_receipts r WHERE r.job_id=j.id) ORDER BY id""",
+            (binding_id,),
+        )
+        return db.execute(
+            "SELECT coalesce(max(seq),0),count(*) FROM recovery_receipts WHERE binding_id=?",
+            (binding_id,),
+        ).fetchone()
 
     @contextmanager
     def operation(self, binding_id, job_id=None, *, kind="worker"):

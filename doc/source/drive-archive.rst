@@ -111,15 +111,156 @@ transport is installed by this change.** An unavailable broker leaves archives
 pending or paused. A broker transport must authenticate its relay, restrict
 operations and references, and protect stdin/stdout and the wallet session.
 
-Current key custody is the operator's KWallet. The owner portal discloses this;
-independent owner key export/recovery is not implemented. Losing the wallet
-identity makes the encrypted archive unrecoverable. Recovery is an explicit
-operator action into a newly created private quarantine directory, never into
-a live Maildir. Age authenticates decryption before tar entries, paths, types,
-counts and message hashes are validated. Original message bytes are preserved.
-Tar validation streams a maximum of 257 members, rejects GNU/PAX sparse
-representations, and bounds both aggregate declared and actual bytes before
-message allocation. The incarnation marker is never archived or restored.
+The operator's KWallet retains archive identities. A personal owner can also
+export a private recovery kit and recover downloaded archives without the
+relay, its database, wallet or broker. This is shared key custody: the operator
+still has the keys and can decrypt archives. It is not exclusive owner custody
+or a zero-knowledge service. Losing every copy of the required identity makes
+its encrypted archives unrecoverable.
+
+The existing broker-backed operator recovery command remains separate. All
+recovery writes to a newly created private quarantine, never directly to a live
+Maildir. Original message bytes are preserved, including compressed gzip bytes;
+the incarnation marker is never archived or restored.
+
+Personal recovery kit
+---------------------
+
+Request the download through the authenticated owner portal before losing
+access to the operator. ``POST /archive/recovery`` requires the verified Google
+issuer/subject session, CSRF proof, the personal binding ID and a fresh existing
+mailbox password. It does not accept an arbitrary address, create a mailbox,
+authorize operator bindings or grant access from a matching profile email.
+The session must own the current, nonretired binding and mailbox incarnation.
+The prominent keys-only action (``mode=keys``) includes all authorized retained
+keys and the tool with explicit ``receipt_coverage: none``. Its availability
+does not depend on the number of historical jobs. It recovers authenticated v2
+archives; legacy v1 additionally requires its historical receipt part.
+
+The historical action creates a ten-minute nonsecret paging snapshot, scoped to
+the current owner, binding, generation and incarnation. Its append-only receipt
+catalog freezes a sequence high-water mark and total count; later uploads do
+not shift the selected range. Each bounded part includes all snapshot keys and
+the tool, plus snapshot/part/count/total/included/cutoff and partial-coverage
+metadata. Reload the portal after part 1 to select any remaining part. Every
+part repeats fresh password, session and CSRF authorization. Browser selectors
+are opaque snapshot ID and numeric part, never broker or job references.
+Expired or stale snapshots require a fresh export. Missing legacy parts cannot
+authenticate their unlisted v1 archives. An initially unallocated Drive file ID
+may remain null in a receipt: digest, size, run and key pin the ciphertext, while
+the catalog does not assert a remote upload exists or remains available.
+
+The export shares the per-binding operation guard with archive work. It checks
+held mailbox/password descriptors against the fresh namespace, resolves eligible
+historical keys outside the database transaction, then performs a final short
+authorization transaction over session, owner, generation, incarnation and
+history. Session logout, revocation, retirement or generation changes detected
+at these checkpoints refuse the in-flight export. The authorization commit is
+the response's boundary: an action after that commit cannot retract private
+bytes already released to the client.
+
+A fresh authorized request may recover history after archive opt-out or Drive
+consent expiry/revocation; it does not reactivate uploads. A retired or recycled
+mailbox binding cannot be exported through the current owner flow. History is
+selected by immutable binding ID, including actual pinned keys across its job
+generations, without joining by mailbox address or including unused credential
+and key candidates. Keep already exported kits when ownership is still current;
+do not rely on later access to a retired binding.
+
+The response is an in-memory private ZIP containing exactly ``recovery.json``,
+the standalone ``restore.py``, ``README.txt`` and ``checksums.json``. It contains
+private native age identities and eligible pinned archive metadata. It excludes
+OAuth tokens, mailbox passwords/verifiers, incarnation proof digests, wallet or
+broker references. The server does not stage the kit on disk and sends no-store
+headers. Successful response delivery does **not** prove that a browser saved
+the kit. Save and independently retain it privately before operator loss. The
+ZIP is not itself password-encrypted; anyone obtaining its identities can read
+the corresponding archives. Its checksums detect corruption, not an independently
+trusted publisher or an operator who already holds the same keys.
+
+An exported identity also authenticates **later** v2 archives from the same
+binding and recipient. A normal consent renewal or binding-generation change
+that retains those keys does not require a new kit or a per-upload server
+receipt. A genuinely new encryption key or a new binding requires a new export
+for its archives. Keep older kits needed for older keys.
+
+V2 archives use standard RFC 5869 HKDF-SHA256 to derive a manifest MAC key from
+the normalized single native age identity, with domain separation for the
+binding and public recipient. An RFC 2104 HMAC-SHA256 authenticates the entire
+canonical manifest inside the age ciphertext, including message paths, sizes
+and hashes. The worker receives the derived MAC through the restricted broker's
+private pipe; routine uploads do not export the private age identity. The
+offline tool derives the same MAC from the privately retained kit. Possession
+of the public age recipient alone cannot forge that manifest authentication.
+
+Legacy v1 archives lack this manifest MAC. They are accepted only when the kit
+already pins their exact ciphertext SHA-256, size, run ID and key. An older kit
+cannot authenticate later unlisted v1 uploads. Neither age nor v2 authentication
+proves that the supplied set is newest or complete: a valid older archive may
+be replayed, and omitted or never-captured messages remain absent.
+
+Offline owner recovery
+----------------------
+
+Download the desired encrypted archives from Drive using your own account and
+retain the private kit. The recovery helper makes no network request. Its
+dependencies are Python 3's standard library on POSIX/Linux and the genuine
+``/usr/bin/age`` and ``/usr/bin/age-keygen`` executables; no Relay installation,
+Python extra, database, wallet, broker or running server is needed.
+
+The standalone implementation is
+:repofile:`recovery_tool.py <chatmaild/src/chatmaild/backup/recovery_tool.py>`;
+the kit exports those exact tool bytes as ``restore.py``. Use that supplied
+tool. After placing it in
+an appropriately private working directory, the invocation is::
+
+    python3 -I restore.py --kit recovery.zip --output /private-parent/NEW downloaded-1.age downloaded-2.age
+
+The private ZIP must be owned by the invoking Unix user and have no group/other
+permissions, for example mode 0600. ``--kit-fd FD`` instead accepts an already
+open private regular-file or pipe descriptor, avoiding a separately staged kit
+file when appropriate. Never put an identity or password in a command argument.
+Repeat ``--kit part-1.zip --kit part-2.zip`` (or ``--kit-fd``) to combine parts.
+The tool accepts only the same binding and consistent keys and immutable receipt
+pins; conflicting duplicates fail. Existing unpaged kits remain supported.
+
+``--output`` must be an absolute, nonexistent immediate child of a pre-existing
+directory owned by that user with mode 0700. Use a dedicated quarantine parent
+outside every live mail root. Ancestors must have safe root/current-user
+ownership and no group/world writes; root-owned sticky ``/tmp`` is the narrow
+ancestor exception. The helper follows no symlink ancestors, rejects known
+mail roots and mailbox/control markers, and uses descriptor-relative exclusive
+writes. It cannot discover every custom mail-root path or defend against a
+malicious process with the same Unix authority; selecting a genuinely separate
+quarantine remains your responsibility.
+
+The tool validates age decryption, manifest authentication or legacy pins,
+archive paths/types/counts, message sizes and hashes. Sparse representations,
+links, traversal and unexpected members are rejected. Output has separate
+run-ID directory trees preserving folder paths, ``cur``/``new``, filenames and
+flags. Different capture windows remain separate rather than overwriting
+versions of a message. Identical ciphertext inputs are deduplicated
+deterministically; conflicting archives claiming the same run ID are rejected.
+
+Only exit status 0, a final ``completion.json`` and absence of ``.incomplete``
+indicate successful processing of the supplied inputs. Completion is written
+last. Failure or interruption returns nonzero and leaves any partial output
+private and incomplete; do not import it. A failed input before output creation
+may leave no destination. Never merge this quarantine automatically into a live
+Maildir. Recovery restores archived message files, not account identity,
+credentials, indexes, deleted messages or a point-in-time snapshot.
+
+The independent tool currently bounds each invocation to sixteen kit parts,
+4 MiB per part and 16 MiB total, 64 distinct keys, 4,096 pinned receipts per
+part and 4,096 input archives, 71 MiB per ciphertext, 70 MiB per
+decrypted archive, 256 messages per archive, and 1 GiB of aggregate recovered
+message bytes. Manifests are bounded to 1 MiB and individual messages to 32 MiB.
+For larger recoveries, select bounded batches and use a different fresh private
+quarantine for each invocation, combining the parts required for those legacy
+inputs. Parts beyond one invocation's aggregate kit limit can be processed in
+another fresh quarantine. More than 64 retained distinct keys still needs an
+explicit operator-supported recovery plan. The completion manifest records the
+provided receipt-part coverage and never asserts missing parts were supplied.
 
 Separate optional operator Drive mode
 ------------------------------------
@@ -152,6 +293,17 @@ plus the standard ``age`` and ``age-keygen`` executables.
 The fixed broker command can be ``python3 -m chatmaild.backup.credentials``
 on the wallet host. Its interpreter/module and transport must be operator
 controlled. Never place OAuth client secrets or refresh tokens in JSON config.
+
+The recovery response carries private keys. Every proxy on that path must pass
+it without disk buffering, caching, storage or body logging. The nginx example
+sets ``proxy_buffering off``, ``proxy_max_temp_file_size 0``, ``proxy_cache off``
+and ``proxy_store off``; the application also sends ``X-Accel-Buffering: no``.
+Do not ignore that header. ``Cache-Control: no-store`` alone does not prevent
+proxy temporary files. These requirements follow nginx's documented
+`buffering behavior <https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_buffering>`_
+and `temporary-file controls <https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_max_temp_file_size>`_.
+Verify the complete proxy path before activation; these examples are not
+installed by this change.
 
 Example **secret-free** config (paths and public client ID are placeholders)::
 
@@ -240,6 +392,10 @@ Integrity and analysis surface
         walletBroker --> captureCurAndNew
         generationCheck --> heldMailboxIncarnation
         heldMailboxIncarnation --> captureCurAndNew
+        captureCurAndNew --> canonicalV2Manifest
+        walletBroker --> boundManifestMAC
+        canonicalV2Manifest --> boundManifestMAC
+        boundManifestMAC --> ageCiphertext
         captureCurAndNew --> ageCiphertext
         ageCiphertext --> DriveSamePrincipal
         DriveSamePrincipal --> downloadedChecksumVerification
@@ -251,11 +407,29 @@ Integrity and analysis surface
         terminalReceiptAndCursorFence --> durableReceipt
         captureCurAndNew --> unresolvedEntryLedger
         walletBroker --> unusedArtifactLedger
+        verifiedSubject --> freshRecoveryMailboxProof
+        freshRecoveryMailboxProof --> recoveryOperationGuard
+        recoveryOperationGuard --> finalRecoveryAuthorization
+        heldMailboxIncarnation --> finalRecoveryAuthorization
+        walletBroker --> finalRecoveryAuthorization
+        immutableBinding --> pinnedBindingKeyHistory
+        pinnedBindingKeyHistory --> finalRecoveryAuthorization
+        finalRecoveryAuthorization --> privateOwnerKit
+        durableReceipt -. legacy v1 pins .-> privateOwnerKit
+        privateOwnerKit --> offlineFormatAuthentication
+        downloadedDriveFiles --> offlineFormatAuthentication
+        offlineFormatAuthentication --> descriptorPrivateQuarantine
+        descriptorPrivateQuarantine --> completionWrittenLast
 
 Observe: existing logging records opaque reason codes, and
 ``chatmail-fsreport --archive-database PATH --textfile DIRECTORY`` adds aggregate
 job, byte, message, retry, stall, failure and last-verification metrics to the
 existing Prometheus file. No subject/mailbox/token labels are exposed.
+Recovery uses this same ledger/metrics surface for request, denial,
+authorization, response completion/abort, key/receipt counts, duration and
+operation-lock stalls. Offline completion summarizes only supplied run/message
+counts; format/authentication failures return opaque reasons and nonzero status.
+Response completion is transport evidence, not proof of a privately saved kit.
 
 Audit: rejected proofs, ownership conflicts, missing scopes, changed sources,
 unsafe paths, quota failures, expired upload sessions, uncertain commits and
@@ -263,6 +437,11 @@ stale generations have durable reason-code ledger entries. Bounded retries use
 the same preallocated Drive file ID, and uncertain completion must reconcile
 metadata then verify downloaded ciphertext before a receipt advances content
 IDs. Upload session URIs remain in memory only.
+Recovery audit records opaque failure reasons and format-authentication
+outcomes, never identities, keys, tokens, passwords, decrypted content or owner
+labels. Exported plaintext identities belong only in the explicitly requested
+private owner kit. A valid recovered archive is not an assertion of newest or
+complete mailbox coverage.
 
 Distribute: capture follows filesystem enumeration and capped exponential
 backoff is deterministic; neither uses generative/probabilistic routing.
@@ -280,3 +459,9 @@ Validation uses synthetic Maildirs, a real age binary, fake Google/Drive
 transports, and isolated rootless containers. Live Google consent, actual Drive
 quota/resume behavior, restricted remote broker deployment, and an operator
 recovery exercise remain activation acceptance checks, not claims made here.
+The personal-kit follow-up adds separate acceptance contracts for export
+authorization/races, independent offline recovery, later v2 uploads after kit
+export, ordinary consent renewal without key rotation, legacy v1 pins, and
+failure-safe quarantine output. Earlier archive/relay test totals do not prove
+these new contracts; use the follow-up's exact integration receipts before
+claiming acceptance.

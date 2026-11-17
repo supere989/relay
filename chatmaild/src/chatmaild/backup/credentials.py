@@ -13,6 +13,7 @@ import sys
 
 import requests
 
+from . import recovery_tool as tool
 from .model import DRIVE_SCOPE, ArchiveError
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -55,6 +56,34 @@ class Broker:
     def key(self):
         return self.call("key")
 
+    def recovery_key(self, ref, recipient):
+        value = self.call("recovery-key", ref=ref, recipient=recipient)
+        return verified_identity(value, recipient)
+
+    def manifest_key(self, ref, binding, recipient):
+        value = self.call("manifest-key", ref=ref, binding=binding, recipient=recipient)
+        if (
+            type(value) is not dict
+            or set(value) != {"key"}
+            or type(value["key"]) is not str
+            or not tool.HEX64.fullmatch(value["key"])
+        ):
+            raise ArchiveError("manifest_key_invalid")
+        return bytes.fromhex(value["key"])
+
+
+def verified_identity(value, recipient):
+    if type(value) is not dict or set(value) != {"identity"}:
+        raise ArchiveError("recovery_key_type")
+    try:
+        identity = tool.normalize_identity(value["identity"])
+        actual = tool.public_recipient(identity)
+    except tool.RecoveryError as exc:
+        raise ArchiveError("recovery_key_invalid") from exc
+    if actual != recipient:
+        raise ArchiveError("recovery_recipient_mismatch")
+    return identity
+
 
 class Wallet:
     """Only used inside the broker process, next to an unlocked KWallet."""
@@ -66,7 +95,9 @@ class Wallet:
 
     def call(self, operation, **payload):
         ref = payload.get("ref", "")
-        if operation in ("put", "get") and not REF.fullmatch(ref):
+        if operation in ("put", "get", "recovery-key", "manifest-key") and (
+            type(ref) is not str or not REF.fullmatch(ref)
+        ):
             raise ArchiveError("invalid_credential_ref")
         if operation == "put":
             value = json.dumps(payload["value"], separators=(",", ":")).encode()
@@ -90,6 +121,20 @@ class Wallet:
                 ]
             )
             return json.loads(data)
+        if operation in ("recovery-key", "manifest-key"):
+            identity = verified_identity(
+                self.call("get", ref=ref), payload.get("recipient")
+            )
+            if operation == "recovery-key":
+                return {"identity": identity}
+            try:
+                return {
+                    "key": tool.mac_key(
+                        identity, payload.get("binding"), payload.get("recipient")
+                    ).hex()
+                }
+            except tool.RecoveryError as exc:
+                raise ArchiveError("manifest_key_invalid") from exc
         if operation == "key":
             identity = self._run(["/usr/bin/age-keygen"]).decode()
             recipient = next(

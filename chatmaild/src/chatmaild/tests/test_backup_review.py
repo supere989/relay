@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from chatmaild.backup import bundle, jobs
+from chatmaild.backup import recovery_tool as tool
 from chatmaild.backup.cli import main, operator_binding, read_policy
 from chatmaild.backup.drive import CHUNK, Drive
 from chatmaild.backup.incarnation import MARKER, Mailbox
@@ -242,6 +243,9 @@ def test_two_consent_callbacks_keep_first_destination_and_pinned_recovery(
         return {"ref": "key-" + name, "recipient": recipients[name]}
 
     p.credentials.broker.key = key
+    p.credentials.broker.manifest_key = lambda ref, binding, recipient: tool.mac_key(
+        identities[ref.removeprefix("key-")], binding, recipient
+    )
     p.credentials.persist = lambda *_args: (
         "credential-" + threading.current_thread().name
     )
@@ -284,7 +288,7 @@ def test_two_consent_callbacks_keep_first_destination_and_pinned_recovery(
         job = store.enqueue(b.id)
         Worker(
             store,
-            SimpleNamespace(access=lambda _: "synthetic"),
+            SimpleNamespace(access=lambda _: "synthetic", broker=p.credentials.broker),
             root,
             tmp_path / "spool",
             drive_factory=UploadDrive,
@@ -337,9 +341,14 @@ def test_two_consent_callbacks_keep_first_destination_and_pinned_recovery(
     assert store.metrics()["events_unused_drive_folder"] == 1
     assert (
         len(
-            bundle.verify_clear(bundle.decrypt(uploads[0][1], identities["consent-A"]))[
-                1
-            ]
+            bundle.verify_clear(
+                bundle.decrypt(uploads[0][1], identities["consent-A"]),
+                binding=b.id,
+                recipient=recipients["consent-A"],
+                mac_key=tool.mac_key(
+                    identities["consent-A"], b.id, recipients["consent-A"]
+                ),
+            )[1]
         )
         == 2
     )

@@ -173,7 +173,16 @@ class Worker:
             store.event(
                 "capture_bytes", b.id, job_id, sum(len(m.data) for m in messages)
             )
-            ciphertext = self.encrypt(messages, job["recipient"], job_id)
+            if self.encrypt is bundle.encrypt:
+                key = self.credentials.broker.manifest_key(
+                    job["key_ref"], b.id, job["recipient"]
+                )
+                checkpoint()
+                ciphertext = self.encrypt(
+                    messages, job["recipient"], job_id, binding=b.id, mac_key=key
+                )
+            else:
+                ciphertext = self.encrypt(messages, job["recipient"], job_id)
             path = self.spool / (job_id + ".age")
             # Opaque fixed names, ciphertext only, no plaintext tar spool.
             temporary = self.spool / (job_id + ".partial")

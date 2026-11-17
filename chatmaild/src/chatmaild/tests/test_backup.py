@@ -206,7 +206,7 @@ def test_real_age_roundtrip_wrong_key_and_truncation(tmp_path):
     wrong, _ = age_key()
     raw = gzip.compress(b"synthetic gzip payload")
     m = Message("cur/message", raw, hashlib.sha256(raw).hexdigest(), "id")
-    encrypted = bundle.encrypt([m], recipient, "run")
+    encrypted = bundle.encrypt_legacy([m], recipient, "1" * 32)
     assert encrypted.startswith(b"age-encryption.org/v1\n")
     assert raw not in encrypted and b"manifest.json" not in encrypted
     target = tmp_path / "quarantine"
@@ -243,7 +243,7 @@ def test_all_folder_messages_real_age_restore_and_new_folder_incremental(tmp_pat
         "Archive/2026/new/nested-message",
     }
     identity, recipient = age_key()
-    ciphertext = bundle.encrypt(first, recipient, "folder-run")
+    ciphertext = bundle.encrypt_legacy(first, recipient, "2" * 32)
     destination = tmp_path / "folder-quarantine"
     bundle.restore(ciphertext, identity, destination)
     for message in first:
@@ -256,7 +256,7 @@ def test_all_folder_messages_real_age_restore_and_new_folder_incremental(tmp_pat
     assert [m.path for m in incremental] == [".Archive.2027/new/arrived-later"]
     second = tmp_path / "incremental-quarantine"
     bundle.restore(
-        bundle.encrypt(incremental, recipient, "later-run"), identity, second
+        bundle.encrypt_legacy(incremental, recipient, "3" * 32), identity, second
     )
     assert (
         second / ".Archive.2027" / "new" / "arrived-later"

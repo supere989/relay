@@ -178,6 +178,20 @@ Chatmail relay dependency diagram
         archive-capture --> archive-verify[Drive principal and downloaded checksum];
         archive-verify --> archive-terminal[terminal receipt and cursor scan fence];
         archive-terminal --> archive-quarantine[private quarantine recovery];
+        archive-capture --> archive-manifest[canonical v2 manifest];
+        archive-wallet --> archive-mac[HKDF bound manifest MAC];
+        archive-manifest --> archive-mac;
+        archive-mac --> archive-verify;
+        archive-identity --> archive-fresh-proof[fresh personal mailbox proof];
+        archive-fresh-proof --> archive-recovery-guard[recovery operation and namespace checks];
+        archive-incarnation --> archive-recovery-guard;
+        archive-recovery-guard --> archive-auth-commit[final session owner generation authorization];
+        archive-wallet --> archive-auth-commit;
+        archive-auth-commit --> archive-owner-kit[private owner recovery kit];
+        archive-terminal -. legacy v1 pins .-> archive-owner-kit;
+        archive-owner-kit --> archive-offline[standalone format authentication];
+        archive-files[downloaded encrypted Drive files] --> archive-offline;
+        archive-offline --> archive-owner-quarantine[exclusive run-ID quarantine and final completion];
         archive-capture --> archive-audit[unresolved entries and unused artifacts];
         archive-wallet --> archive-audit;
         chatmail-expire-daily --- maildir;
@@ -408,6 +422,15 @@ Architecture of cmdeploy
 
 The optional encrypted archive surface and its setup boundary are documented
 in :doc:`drive-archive`. It is not registered for automatic deployment.
+Personal owners may privately retain an exported recovery kit and recover
+downloaded message archives using standalone Python and age tooling, without
+the operator's running relay, database or wallet. The operator still retains
+the archive keys. Later authenticated v2 uploads under the same binding/key
+remain recoverable with that kit, including after ordinary consent renewal;
+real key rotation requires another export. Export authorization and offline
+archive authentication are separate trust boundaries. Neither a completed
+download nor a valid restored capture window proves private retention, newest
+history or a complete mailbox snapshot.
 The downstream :doc:`runtime-maintenance` path connects primary advisory and
 release facts to the runtime lock and source/binary checks, then private
 candidate builds and offline authentication/notification tests before explicit

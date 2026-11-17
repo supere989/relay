@@ -1,16 +1,15 @@
 """Standard age v1 encryption, with plaintext held only in bounded memory."""
 
-import hashlib
 import io
-import json
 import os
 import subprocess
 import tarfile
 from pathlib import Path
 
-from . import FORMAT
+from . import FORMAT, LEGACY_FORMAT
+from . import recovery_tool as tool
 from .model import ArchiveError
-from .sources import message_path, relative_path
+from .sources import message_path
 
 MAX_CLEAR = 70 * 1024 * 1024
 
@@ -33,11 +32,22 @@ def _run(argv, data, *, pass_fds=()):
     return result.stdout
 
 
-def encrypt(messages, recipient, run_id, *, age="/usr/bin/age"):
+def encrypt(messages, recipient, run_id, *, binding, mac_key, age="/usr/bin/age"):
+    return _encrypt(
+        messages, recipient, run_id, binding=binding, mac_key=mac_key, age=age
+    )
+
+
+def encrypt_legacy(messages, recipient, run_id, *, age="/usr/bin/age"):
+    """Explicit v1 compatibility fixture/import path; new workers never use it."""
+    return _encrypt(messages, recipient, run_id, binding=None, mac_key=None, age=age)
+
+
+def _encrypt(messages, recipient, run_id, *, binding, mac_key, age):
     if not recipient.startswith("age1") or len(recipient) > 128:
         raise ArchiveError("invalid_recipient")
     manifest = {
-        "format": FORMAT,
+        "format": FORMAT if binding is not None else LEGACY_FORMAT,
         "run": run_id,
         "consistency": "capture-window-per-message",
         "coverage": "incomplete"
@@ -50,6 +60,10 @@ def encrypt(messages, recipient, run_id, *, age="/usr/bin/age"):
             for m in messages
         ],
     }
+    if binding is not None:
+        if not tool.OPAQUE.fullmatch(binding) or mac_key is None:
+            raise ArchiveError("manifest_auth_context_missing")
+        manifest.update(binding=binding, recipient=recipient)
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as tar:
 
@@ -58,10 +72,12 @@ def encrypt(messages, recipient, run_id, *, age="/usr/bin/age"):
             item.size, item.mode, item.mtime = len(data), 0o600, 0
             tar.addfile(item, io.BytesIO(data))
 
-        manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode()
+        manifest_bytes = tool.canonical(manifest)
         if len(manifest_bytes) > 1024 * 1024:
             raise ArchiveError("manifest_limit")
         add("manifest.json", manifest_bytes)
+        if binding is not None:
+            add("manifest.hmac", tool.manifest_mac(manifest_bytes, mac_key))
         for message in messages:
             message_path(message.path)
             add("messages/" + message.path, message.data)
@@ -95,78 +111,36 @@ def decrypt(ciphertext, identity, *, age="/usr/bin/age"):
     return clear
 
 
-def verify_clear(clear):
+def verify_clear(clear, *, binding=None, recipient=None, mac_key=None):
     """Validate the entire authenticated archive before writing any message."""
-    if len(clear) > MAX_CLEAR:
-        raise ArchiveError("restore_size_limit")
     try:
-        with tarfile.open(fileobj=io.BytesIO(clear), mode="r|") as tar:
-            contents = {}
-            declared = actual = 0
-            for index, item in enumerate(tar):
-                if index >= 257:
-                    raise ArchiveError("manifest_count")
-                relative_path(item.name)
-                if (
-                    item.type not in (tarfile.REGTYPE, tarfile.AREGTYPE)
-                    or item.sparse is not None
-                    or any(
-                        key.startswith("GNU.sparse") or key == "SCHILY.realsize"
-                        for key in item.pax_headers
-                    )
-                ):
-                    raise ArchiveError("unsafe_tar_member")
-                declared += item.size
-                if item.name in contents or item.size < 0 or declared > MAX_CLEAR:
-                    raise ArchiveError("restore_size_limit")
-                if item.name == "manifest.json" and item.size > 1024 * 1024:
-                    raise ArchiveError("manifest_limit")
-                data = tar.extractfile(item).read(item.size + 1)
-                actual += len(data)
-                if len(data) != item.size or actual > MAX_CLEAR:
-                    raise ArchiveError("restore_size_limit")
-                contents[item.name] = data
-            if "manifest.json" not in contents:
-                raise ArchiveError("manifest_missing")
-            manifest = json.loads(contents["manifest.json"])
-            if (
-                manifest.get("format") != FORMAT
-                or not isinstance(manifest.get("messages"), list)
-                or len(manifest["messages"]) > 256
-            ):
-                raise ArchiveError("manifest_invalid")
-            result = []
-            expected = {"manifest.json"}
-            for entry in manifest["messages"]:
-                path = str(message_path(entry["path"]))
-                name = "messages/" + path
-                if name in expected:
-                    raise ArchiveError("manifest_invalid")
-                expected.add(name)
-                data = contents[name]
-                if (
-                    len(data) != entry["size"]
-                    or hashlib.sha256(data).hexdigest() != entry["sha256"]
-                ):
-                    raise ArchiveError("manifest_checksum")
-                result.append((path, data))
-            if contents.keys() != expected:
-                raise ArchiveError("manifest_count")
-            return manifest, result
-    except (
-        tarfile.TarError,
-        ValueError,
-        KeyError,
-        TypeError,
-        AttributeError,
-        OSError,
-    ) as exc:
-        raise ArchiveError("archive_invalid") from exc
+        return tool.validate_clear(
+            clear, binding=binding, recipient=recipient, key=mac_key, legacy=True
+        )
+    except tool.RecoveryError as exc:
+        reason = {
+            "tar_count_limit": "manifest_count",
+            "message_checksum_mismatch": "manifest_checksum",
+        }.get(str(exc), str(exc))
+        raise ArchiveError(reason) from exc
 
 
 def restore(ciphertext, identity, destination, *, age="/usr/bin/age"):
     """Create a NEW private quarantine. Never write into an existing directory."""
-    manifest, messages = verify_clear(decrypt(ciphertext, identity, age=age))
+    clear = decrypt(ciphertext, identity, age=age)
+    try:
+        header = tool.json_object(tool.tar_components(clear).get("manifest.json", b""))
+        context = {}
+        if header.get("format") == FORMAT:
+            recipient = tool.public_recipient(identity)
+            context = {
+                "binding": header.get("binding"),
+                "recipient": recipient,
+                "mac_key": tool.mac_key(identity, header.get("binding"), recipient),
+            }
+    except tool.RecoveryError as exc:
+        raise ArchiveError(str(exc)) from exc
+    manifest, messages = verify_clear(clear, **context)
     destination = Path(destination)
     if destination.exists() or destination.is_symlink():
         raise ArchiveError("restore_requires_new_directory")

@@ -3,6 +3,7 @@
 import hmac
 import html
 import ipaddress
+import logging
 import secrets
 import sqlite3
 import threading
@@ -68,7 +69,7 @@ def _valid_proof_address(config, address, password):
 
 
 @contextmanager
-def proven_mailbox(config, address, password):
+def proven_mailbox(config, address, password, *, final_check=True):
     if not _valid_proof_address(config, address, password):
         raise ArchiveError("mailbox_proof_denied")
     try:
@@ -80,7 +81,8 @@ def proven_mailbox(config, address, password):
                 raise ArchiveError("mailbox_proof_denied")
             mailbox.check_paths()
             yield mailbox
-            mailbox.check_paths()
+            if final_check:
+                mailbox.check_paths()
     except (ValueError, OSError, UnicodeError) as exc:
         raise ArchiveError("mailbox_proof_denied") from exc
 
@@ -346,7 +348,46 @@ class Portal:
                         + b.id
                         + '"><button>Retry unresolved source entries</button></form>'
                     )
-                body += "<p>Encrypted archives are additive; existing Drive files remain after opt-out. Recovery keys are held in the operator wallet; independent owner key recovery is not configured.</p>"
+                body += "<p>Download independent recovery keys before this mailbox instance ends. This keys-only kit covers all authenticated v2 uploads under the same key, including later uploads and ordinary consent renewal. New keys or a new mailbox instance need a new export. The operator wallet retains a copy; authenticated replay does not prove latest state or completeness.</p>"
+                recovery_form = (
+                    '<form method="post" action="/archive/recovery">'
+                    + token
+                    + '<input type="hidden" name="binding" value="'
+                    + b.id
+                    + '"><label>Fresh mailbox password <input type="password" name="password" maxlength="1024" autocomplete="current-password" required></label>'
+                )
+                body += (
+                    recovery_form
+                    + '<input type="hidden" name="mode" value="keys"><button>Download keys + offline tool (v2, no legacy receipts)</button></form>'
+                )
+                body += "<p>Legacy v1 archives require their exact historical receipt part. Each part also includes all snapshot keys and the tool. Download every historical part you need; combine parts with repeated --kit options. Snapshots expire after 10 minutes; reload this page after the first historical download to select subsequent parts.</p>"
+                body += (
+                    recovery_form
+                    + "<button>Start historical receipt snapshot: download part 1</button></form>"
+                )
+                with self.store.connect() as db:
+                    snapshot = db.execute(
+                        "SELECT id,total FROM recovery_snapshots WHERE binding_id=? AND owner=? AND generation=? AND incarnation=? AND expires>? ORDER BY created DESC LIMIT 1",
+                        (b.id, b.owner, b.generation, b.incarnation, time.time()),
+                    ).fetchone()
+                if snapshot:
+                    from .recovery_tool import MAX_ARCHIVES
+
+                    parts = max(1, (snapshot[1] + MAX_ARCHIVES - 1) // MAX_ARCHIVES)
+                    body += (
+                        "<p>Current snapshot: "
+                        + str(snapshot[1])
+                        + " historical receipts in "
+                        + str(parts)
+                        + " part(s). Each response covers only its selected part; later uploads are outside this fixed snapshot.</p>"
+                        + recovery_form
+                        + '<input type="hidden" name="snapshot" value="'
+                        + snapshot[0]
+                        + '"><label>Receipt part <input type="number" name="part" min="1" max="'
+                        + str(parts)
+                        + '" value="1" required></label><button>Download selected historical part</button></form>'
+                    )
+                body += "<p>Turning off future archiving keeps existing Drive files and your current recovery-download access. A retired mailbox instance cannot issue a new kit.</p>"
                 body += (
                     '<form method="post" action="/archive/consent">'
                     + token
@@ -452,6 +493,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not 0 <= length <= 4096:
                     raise ArchiveError("body_limit")
                 form = self.parameters(self.rfile.read(length).decode("utf-8"))
+                if path == "/archive/recovery":
+                    from .recovery import Recovery
+
+                    download = Recovery(
+                        portal.store, portal.config, portal.credentials.broker
+                    ).export(session, form)
+                    return self.recovery_reply(raw, download)
                 portal.mutation(session, form)
                 if path == "/archive/login":
                     return self.reply(303, raw, location=portal.begin(session))
@@ -539,6 +587,47 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
         self.close_connection = True
+
+    def recovery_reply(self, session_id, download):
+        reason = "recovery_response_aborted"
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header(
+                "Content-Disposition",
+                'attachment; filename="recovery-' + download.export_id + '.zip"',
+            )
+            self.send_header("Content-Length", str(len(download.body)))
+            self.send_header("Cache-Control", "private, no-store, max-age=0")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+            )
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(download.body)
+            self.wfile.flush()
+            reason = "recovery_response_completed"
+        except (OSError, ConnectionError):
+            pass
+        finally:
+            self.close_connection = True
+            try:
+                self.server.portal.store.event(
+                    reason, download.binding, download.export_id
+                )
+            except Exception:
+                # Bytes were already authorized; a status write cannot turn
+                # that into a fresh authorization denial or an HTML response.
+                logging.warning(
+                    "archive event=recovery_outcome_ledger_failed binding=%s export=%s",
+                    download.binding,
+                    download.export_id,
+                )
 
 
 class Server(ThreadingHTTPServer):
