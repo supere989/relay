@@ -22,12 +22,13 @@ jobs:
           mkdir -p runtime-evidence
           python3 -m cmdeploy.runtime_intake --output runtime-evidence/facts.json
       - name: Report source and binary coverage
+        # This intake collects evidence. The deployment preflight enforces promotion.
         if: always()
         env:
           PYTHONPATH: cmdeploy/src
         run: |
           python3 -m cmdeploy.runtime_audit --facts runtime-evidence/facts.json \
-            --output runtime-evidence/report.json --summary "$GITHUB_STEP_SUMMARY" --gate
+            --output runtime-evidence/report.json --summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
