@@ -1,7 +1,7 @@
 import time
 
-from chatmaild.delete_inactive_users import delete_inactive_users
-from chatmaild.doveauth import AuthDictProxy
+from chatmaild.doveauth import DoveAuth
+from chatmaild.expire import daily_expire_main as main_expire
 
 
 def test_login_timestamps(example_config):
@@ -18,10 +18,10 @@ def test_login_timestamps(example_config):
 def test_delete_inactive_users(example_config):
     new = time.time()
     old = new - (example_config.delete_inactive_users_after * 86400) - 1
-    dictproxy = AuthDictProxy(example_config)
+    doveauth = DoveAuth(example_config)
 
     def create_user(addr, last_login):
-        dictproxy.lookup_passdb(addr, "q9mr3faue")
+        doveauth.create_user(addr, "q9mr3faue")
         user = example_config.get_user(addr)
         user.maildir.joinpath("cur").mkdir()
         user.maildir.joinpath("cur", "something").mkdir()
@@ -45,7 +45,12 @@ def test_delete_inactive_users(example_config):
     for addr in to_remove:
         assert example_config.get_user(addr).maildir.exists()
 
-    delete_inactive_users(example_config)
+    main_expire(
+        args=[
+            "--remove",
+            str(example_config._inipath),
+        ]
+    )
 
     for p in example_config.mailboxes_dir.iterdir():
         assert not p.name.startswith("old")

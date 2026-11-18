@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; child-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Archive Manager</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="webxdc.js"></script>
+  <script src="vendor/nacl-fast.min.js"></script>
+  <script src="bootstrap.js"></script>
+  <script src="protocol.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><img src="icon.svg" width="42" height="42" alt=""><div><p class="eyebrow">Your private archive service</p><h1>Archive Manager</h1></div></header>
+    <p id="connection" class="notice" role="status" aria-live="polite">Waiting for verified service status. Earlier information is not current.</p>
+    <div class="toolbar"><button id="refresh" type="button">Refresh status</button><span id="updated"></span></div>
+    <p id="feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+    <details><summary>Connection details</summary><p id="verification-events">No delayed or rejected verification events in this session.</p></details>
+    <section id="pair-panel" hidden aria-labelledby="pair-title">
+      <h2 id="pair-title">Connect an existing mailbox</h2>
+      <p>Link this private service conversation in the secure portal. Keep the comparison code in this app private.</p>
+      <button id="pair-start" type="button">Connect mailbox</button>
+      <div id="pair-details" hidden>
+        <p id="pair-peer"></p><p>Comparison code: <strong id="comparison"></strong></p>
+        <p id="pair-instruction"></p>
+        <button id="pair-confirm" type="button" hidden>Confirm this browser request</button>
+      </div>
+    </section>
+    <section id="mailbox-panel" hidden aria-labelledby="mailbox-title">
+      <h2 id="mailbox-title">Your linked mailboxes</h2>
+      <label for="mailbox">Mailbox</label><select id="mailbox"></select>
+      <article id="mailbox-state" aria-live="polite">
+        <h3 id="archive-state"></h3><p id="coverage"></p>
+        <dl><div><dt>Last verified</dt><dd id="last-verified"></dd></div><div><dt>Verified files</dt><dd id="verified-files"></dd></div><div><dt>Queued work</dt><dd id="queued-jobs"></dd></div><div><dt>Unresolved entries</dt><dd id="unresolved"></dd></div><div><dt>Waiting for another attempt</dt><dd id="eligible-unresolved"></dd></div><div><dt>Held for manual retry</dt><dd id="held-unresolved"></dd></div></dl>
+        <p id="archive-help"></p>
+      </article>
+      <div class="actions"><button id="pause" type="button">Turn archiving off</button><button id="resume" type="button">Resume archiving</button><button id="reconnect" type="button">Reconnect Drive</button><button id="recovery" type="button">Open private recovery</button></div>
+      <section aria-labelledby="work-title"><h3 id="work-title">Recent work</h3><p id="jobs-omitted" class="small" hidden></p><ul id="jobs"></ul></section>
+      <details><summary>Mailbox links</summary><p>Unlinking removes this conversation's access. It does not delete files from Drive.</p><button id="unlink" class="secondary" type="button">Unlink this mailbox</button><button id="add-mailbox" class="secondary" type="button">Connect another mailbox</button></details>
+    </section>
+    <section id="handoff-panel" hidden aria-labelledby="handoff-title">
+      <h2 id="handoff-title">Continue in your browser</h2>
+      <p id="handoff-help">Google consent, mailbox passwords and private recovery downloads stay in the secure browser portal.</p>
+      <a id="portal-link" rel="noopener noreferrer" target="_blank">Open secure portal</a>
+      <label for="portal-url">Full portal address — copy if your client cannot open it</label>
+      <input id="portal-url" type="text" readonly spellcheck="false" autocomplete="off">
+      <button id="copy-url" type="button">Select address to copy</button>
+      <p class="small">Your client must show the full address and ask before opening an external site. Check the address before continuing.</p>
+    </section>
+    <footer><p>This app manages message archives. A verified batch is not a complete mailbox backup or a Delta Chat profile import.</p><p>No Google password, mailbox password, token or recovery key belongs in this conversation.</p></footer>
+  </main>
+</body>
+</html>

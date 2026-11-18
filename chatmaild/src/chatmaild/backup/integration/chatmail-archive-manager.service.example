@@ -1,0 +1,29 @@
+# Optional reference; never installed/enabled by cmdeploy.
+# Prerequisites: reviewed state enrollment and matching UID/GID/shared mount
+# namespace for this service, portal, worker, root helper and guarded metrics.
+[Unit]
+Description=Optional encrypted Archive Manager
+BindsTo=chatmail-archive-state.service
+After=chatmail-archive-state.service network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=vmail
+Group=vmail
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+LimitCORE=0
+RuntimeDirectory=chatmail-archive-manager
+RuntimeDirectoryMode=0700
+ExecStart=/usr/local/bin/chatmail-archive-manager --config /etc/chatmail-archive.json serve
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+# Do not add PrivateTmp/ProtectSystem or another private mount namespace:
+# the root helper's attested namespace must match all dependent consumers.
+
+[Install]
+WantedBy=multi-user.target

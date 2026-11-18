@@ -20,6 +20,10 @@ def make_config(tmp_path):
         basedir.mkdir(parents=True, exist_ok=True)
         overrides = settings.copy() if settings else {}
         overrides["mailboxes_dir"] = str(basedir)
+        # permissive resource limits so tests never depend on host load/memory/disk
+        overrides.setdefault("max_load_1m", "99999")
+        overrides.setdefault("min_available_memory", "0")
+        overrides.setdefault("min_free_disk_space", "0")
         write_initial_config(inipath, mail_domain, overrides=overrides)
         return read_config(inipath)
 
@@ -32,22 +36,27 @@ def example_config(make_config):
 
 
 @pytest.fixture
-def maildomain(example_config):
+def ipv4_config(make_config):
+    return make_config("1.3.3.7")
+
+
+@pytest.fixture
+def example_maildomain(example_config):
     return example_config.mail_domain
 
 
 @pytest.fixture
-def testaddr(maildomain):
-    return f"user.name@{maildomain}"
+def testaddr(example_maildomain):
+    return f"user.name@{example_maildomain}"
 
 
 @pytest.fixture
-def gencreds(maildomain):
+def example_gencreds(example_maildomain):
     count = itertools.count()
     next(count)
 
     def gen(domain=None):
-        domain = domain if domain else maildomain
+        domain = domain if domain else example_maildomain
         while 1:
             num = next(count)
             alphanumeric = "abcdefghijklmnopqrstuvwxyz1234567890"

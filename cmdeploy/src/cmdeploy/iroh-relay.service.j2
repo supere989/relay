@@ -1,0 +1,12 @@
+[Unit]
+Description=Iroh relay
+
+[Service]
+ExecStart={{ bin_path }} --config-path {{ config_path }}
+Restart=on-failure
+RestartSec=5s
+User=iroh
+Group=iroh
+
+[Install]
+WantedBy=multi-user.target

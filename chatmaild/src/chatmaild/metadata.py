@@ -1,5 +1,10 @@
+import json
 import logging
+import socket
 import sys
+import time
+from contextlib import contextmanager
+from importlib.resources import files
 
 from .config import read_config
 from .dictproxy import DictProxy
@@ -7,8 +12,35 @@ from .filedict import FileDict
 from .notifier import Notifier
 
 
+def turn_credentials(turn_socket_path):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
+        client_socket.settimeout(5)
+        client_socket.connect(turn_socket_path)
+        with client_socket.makefile("rb") as file:
+            return file.readline().decode("utf-8").strip()
+
+
+def read_appversions(path):
+    try:
+        data = json.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        logging.exception(f"failed to read {path}")
+        return None
+    # the dict protocol is line-based, keep the value single-line
+    return json.dumps(data, separators=(",", ":"))
+
+
+def _is_valid_token_timestamp(timestamp, now):
+    # Token if invalid after 90 days
+    # or if the timestamp is in the future.
+    return timestamp > now - 3600 * 24 * 90 and timestamp < now + 60
+
+
 class Metadata:
-    # each SETMETADATA on this key appends to a list of unique device tokens
+    # each SETMETADATA on this key appends to dictionary
+    # mapping of unique device tokens
     # which only ever get removed if the upstream indicates the token is invalid
     DEVICETOKEN_KEY = "devicetoken"
 
@@ -18,47 +50,100 @@ class Metadata:
     def get_metadata_dict(self, addr):
         return FileDict(self.vmail_dir / addr / "metadata.json")
 
-    def add_token_to_addr(self, addr, token):
+    @contextmanager
+    def _modify_tokens(self, addr):
         with self.get_metadata_dict(addr).modify() as data:
-            tokens = data.setdefault(self.DEVICETOKEN_KEY, [])
-            if token not in tokens:
-                tokens.append(token)
+            tokens = data.setdefault(self.DEVICETOKEN_KEY, {})
+            now = int(time.time())
+            if isinstance(tokens, list):
+                data[self.DEVICETOKEN_KEY] = tokens = {t: now for t in tokens}
+
+            expired_tokens = [
+                token
+                for token, timestamp in tokens.items()
+                if not _is_valid_token_timestamp(tokens[token], now)
+            ]
+            for expired_token in expired_tokens:
+                del tokens[expired_token]
+
+            yield tokens
+
+    def add_token_to_addr(self, addr, token):
+        with self._modify_tokens(addr) as tokens:
+            tokens[token] = int(time.time())
 
     def remove_token_from_addr(self, addr, token):
-        with self.get_metadata_dict(addr).modify() as data:
-            tokens = data.get(self.DEVICETOKEN_KEY, [])
+        with self._modify_tokens(addr) as tokens:
             if token in tokens:
-                tokens.remove(token)
+                del tokens[token]
 
     def get_tokens_for_addr(self, addr):
         mdict = self.get_metadata_dict(addr).read()
-        return mdict.get(self.DEVICETOKEN_KEY, [])
+        tokens = mdict.get(self.DEVICETOKEN_KEY, {})
+
+        now = int(time.time())
+        if isinstance(tokens, dict):
+            token_list = [
+                token
+                for token, timestamp in tokens.items()
+                if _is_valid_token_timestamp(timestamp, now)
+            ]
+            if len(token_list) < len(tokens):
+                # Some tokens have expired, remove them.
+                with self._modify_tokens(addr) as _tokens:
+                    pass
+        elif isinstance(tokens, list):
+            with self._modify_tokens(addr) as tokens:
+                token_list = list(tokens.keys())
+        else:
+            token_list = []
+        return token_list
 
 
 class MetadataDictProxy(DictProxy):
-    def __init__(self, notifier, metadata, iroh_relay=None):
+    def __init__(
+        self,
+        notifier,
+        metadata,
+        iroh_relay=None,
+        turn_hostname=None,
+        turn_socket_path=None,
+    ):
         super().__init__()
         self.notifier = notifier
         self.metadata = metadata
         self.iroh_relay = iroh_relay
+        self.turn_hostname = turn_hostname
+        self.turn_socket_path = turn_socket_path
+        self.appversions_path = files(__package__).joinpath("defaults/appversions.json")
 
     def handle_lookup(self, parts):
         # Lpriv/43f5f508a7ea0366dff30200c15250e3/devicetoken\tlkj123poi@c2.testrun.org
-        keyparts = parts[0].split("/", 2)
-        if keyparts[0] == "priv":
-            keyname = keyparts[2]
-            addr = parts[1]
-            if keyname == self.metadata.DEVICETOKEN_KEY:
+        match parts[0].split("/", 2):
+            case ["priv", _, keyname] if keyname == self.metadata.DEVICETOKEN_KEY:
+                addr = parts[1]
                 res = " ".join(self.metadata.get_tokens_for_addr(addr))
                 return f"O{res}\n"
-        elif keyparts[0] == "shared":
-            keyname = keyparts[2]
-            if (
-                keyname == "vendor/vendor.dovecot/pvt/server/vendor/deltachat/irohrelay"
-                and self.iroh_relay
-            ):
-                # Handle `GETMETADATA "" /shared/vendor/deltachat/irohrelay`
-                return f"O{self.iroh_relay}\n"
+            case ["shared", _, keyname]:
+                prefix = "vendor/vendor.dovecot/pvt/server/vendor/deltachat/"
+                if keyname.startswith(prefix):
+                    match keyname[len(prefix) :]:
+                        case "irohrelay" if self.iroh_relay:
+                            return f"O{self.iroh_relay}\n"
+                        case "turn":
+                            try:
+                                res = turn_credentials(self.turn_socket_path)
+                            except Exception:
+                                logging.exception("failed to get TURN credentials")
+                                return "N\n"
+                            return f"O{self.turn_hostname}:3478:{res}\n"
+                        case "maxsmtprecipients":
+                            # postfix default  (see "postconf smtpd_recipient_limit")
+                            return "O1000\n"
+                        case "appversions":
+                            value = read_appversions(self.appversions_path)
+                            return f"O{value}\n" if value else "N\n"
+
         logging.warning(f"lookup ignored: {parts!r}")
         return "N\n"
 
@@ -67,12 +152,13 @@ class MetadataDictProxy(DictProxy):
         # https://github.com/dovecot/core/blob/main/src/lib-storage/mailbox-attribute.h
         keyname = parts[1].split("/")
         value = parts[2] if len(parts) > 2 else ""
-        if keyname[0] == "priv" and keyname[2] == self.metadata.DEVICETOKEN_KEY:
-            self.metadata.add_token_to_addr(addr, value)
-            return True
-        elif keyname[0] == "priv" and keyname[2] == "messagenew":
-            self.notifier.new_message_for_addr(addr, self.metadata)
-            return True
+        match keyname:
+            case ["priv", _, key] if key == self.metadata.DEVICETOKEN_KEY:
+                self.metadata.add_token_to_addr(addr, value)
+                return True
+            case ["priv", _, "messagenew"]:
+                self.notifier.new_message_for_addr(addr, self.metadata)
+                return True
 
         return False
 
@@ -82,6 +168,8 @@ def main():
 
     config = read_config(config_path)
     iroh_relay = config.iroh_relay
+    mail_domain = config.mail_domain
+    socket_path = config.turn_socket_path
 
     vmail_dir = config.mailboxes_dir
     if not vmail_dir.exists():
@@ -95,7 +183,11 @@ def main():
     notifier.start_notification_threads(metadata.remove_token_from_addr)
 
     dictproxy = MetadataDictProxy(
-        notifier=notifier, metadata=metadata, iroh_relay=iroh_relay
+        notifier=notifier,
+        metadata=metadata,
+        iroh_relay=iroh_relay,
+        turn_hostname=mail_domain,
+        turn_socket_path=socket_path,
     )
 
     dictproxy.serve_forever_from_socket(socket)

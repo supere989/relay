@@ -1,75 +1,62 @@
-import importlib.resources
+from pyinfra.operations import server
 
-from pyinfra import host
-from pyinfra.facts.systemd import SystemdStatus
-from pyinfra.operations import apt, files, server, systemd
+from ..basedeploy import Deployer, package_manager, platform_packages
 
 
-def deploy_acmetool(email="", domains=[]):
-    """Deploy acmetool."""
-    apt.packages(
-        name="Install acmetool",
-        packages=["acmetool"],
-    )
+class AcmetoolDeployer(Deployer):
+    bin_path = "/usr/bin/acmetool"
 
-    files.put(
-        src=importlib.resources.files(__package__).joinpath("acmetool.cron").open("rb"),
-        dest="/etc/cron.d/acmetool",
-        user="root",
-        group="root",
-        mode="644",
-    )
+    def __init__(self, email, domains):
+        self.domains = domains
+        self.email = email
 
-    files.put(
-        src=importlib.resources.files(__package__).joinpath("acmetool.hook").open("rb"),
-        dest="/usr/lib/acme/hooks/nginx",
-        user="root",
-        group="root",
-        mode="744",
-    )
-
-    files.template(
-        src=importlib.resources.files(__package__).joinpath("response-file.yaml.j2"),
-        dest="/var/lib/acme/conf/responses",
-        user="root",
-        group="root",
-        mode="644",
-        email=email,
-    )
-
-    files.template(
-        src=importlib.resources.files(__package__).joinpath("target.yaml.j2"),
-        dest="/var/lib/acme/conf/target",
-        user="root",
-        group="root",
-        mode="644",
-    )
-
-    service_file = files.put(
-        src=importlib.resources.files(__package__).joinpath(
-            "acmetool-redirector.service"
-        ),
-        dest="/etc/systemd/system/acmetool-redirector.service",
-        user="root",
-        group="root",
-        mode="644",
-    )
-    if host.get_fact(SystemdStatus).get("nginx.service"):
-        systemd.service(
-            name="Stop nginx service to free port 80",
-            service="nginx",
-            running=False,
+    def install(self):
+        package_manager().packages(
+            name="Install acmetool",
+            packages=platform_packages("acmetool"),
         )
 
-    systemd.service(
-        name="Setup acmetool-redirector service",
-        service="acmetool-redirector.service",
-        running=True,
-        enabled=True,
-        restarted=service_file.changed,
-    )
+        self.remove_file("/etc/cron.d/acmetool")
 
-    server.shell(
-        name=f"Request certificate for: {', '.join(domains)}",
-        commands=[f"acmetool want --xlog.severity=debug {' '.join(domains)}"],
-    )
+        self.put_executable("acmetool/acmetool.hook", "/etc/acme/hooks/nginx")
+        self.remove_file("/usr/lib/acme/hooks/nginx")
+
+    def configure(self):
+        self.put_template(
+            "acmetool/response-file.yaml.j2",
+            "/var/lib/acme/conf/responses",
+            email=self.email,
+        )
+
+        self.put_template(
+            "acmetool/target.yaml.j2",
+            "/var/lib/acme/conf/target",
+        )
+
+        server.shell(
+            name=f"Remove old acmetool desired files for {self.domains[0]}",
+            commands=[f"rm -f /var/lib/acme/desired/{self.domains[0]}-*"],
+        )
+        self.put_template(
+            "acmetool/desired.yaml.j2",
+            f"/var/lib/acme/desired/{self.domains[0]}",
+            domains=self.domains,
+        )
+
+        self.ensure_systemd_unit(
+            "acmetool/acmetool-redirector.service.j2", bin_path=self.bin_path
+        )
+        self.ensure_systemd_unit(
+            "acmetool/acmetool-reconcile.service.j2", bin_path=self.bin_path
+        )
+        self.ensure_systemd_unit("acmetool/acmetool-reconcile.timer")
+
+    def activate(self):
+        self.ensure_service("acmetool-redirector.service")
+        self.ensure_service("acmetool-reconcile.service", running=False, enabled=False)
+        self.ensure_service("acmetool-reconcile.timer")
+
+        server.shell(
+            name=f"Reconcile certificates for: {', '.join(self.domains)}",
+            commands=[f"{self.bin_path} --batch --xlog.severity=debug reconcile"],
+        )

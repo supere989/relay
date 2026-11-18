@@ -1,0 +1,182 @@
+import io
+import urllib.request
+
+from chatmaild.config import Config
+from pyinfra import host
+from pyinfra.facts.deb import DebPackages
+from pyinfra.facts.server import Arch, Command, Sysctl
+from pyinfra.operations import apt, files, server
+
+from cmdeploy.basedeploy import (
+    Deployer,
+    activate_remote_units,
+    blocked_service_startup,
+    configure_remote_units,
+    is_in_container,
+    require_runtime_profile,
+)
+from cmdeploy.pins import DOVECOT_SHA256, DOVECOT_VERSION
+
+DOVECOT_PACKAGE_VERSION = f"1:{DOVECOT_VERSION}"
+
+
+class DovecotDeployer(Deployer):
+    daemon_reload = False
+
+    def __init__(self, config, disable_mail):
+        self.config = config
+        self.disable_mail = disable_mail
+        self.units = []
+
+    def install(self):
+        require_runtime_profile()
+        arch = host.get_fact(Arch)
+        with blocked_service_startup():
+            debs = []
+            for pkg in ("core", "imapd", "lmtpd", "auth-lua"):
+                deb, changed = _download_dovecot_package(pkg, arch)
+                self.need_restart |= changed
+                if deb:
+                    debs.append(deb)
+            if debs:
+                deb_list = " ".join(debs)
+                # First dpkg may fail on missing dependencies (stderr suppressed);
+                # apt-get --fix-broken pulls them in, then dpkg retries cleanly.
+                server.shell(
+                    name="Install dovecot packages",
+                    commands=[
+                        f"dpkg --force-confdef --force-confold -i {deb_list} 2> /dev/null || true",
+                        "DEBIAN_FRONTEND=noninteractive apt-get -y --fix-broken install",
+                        f"dpkg --force-confdef --force-confold -i {deb_list}",
+                    ],
+                )
+                self.need_restart = True
+        self.put_file(
+            src=io.StringIO("Package: dovecot-*\nPin: version *\nPin-Priority: -1\n"),
+            dest="/etc/apt/preferences.d/pin-dovecot",
+        )
+
+    def configure(self):
+        require_runtime_profile()
+        configure_remote_units(self, self.config.mail_domain_bare, self.units)
+        _configure_dovecot(self, self.config)
+
+    def activate(self):
+        require_runtime_profile()
+        activate_remote_units(self, self.units)
+
+        # Detect stale binary: package installed but service still runs old (deleted) binary.
+        if not self.disable_mail and not self.need_restart:
+            stale = host.get_fact(
+                Command,
+                "pid=$(systemctl show -p MainPID --value dovecot.service 2>/dev/null);"
+                ' [ "${pid:-0}" != "0" ] && readlink "/proc/$pid/exe" 2>/dev/null | grep -q "(deleted)"'
+                " && echo STALE || true",
+            )
+            if stale == "STALE":
+                self.need_restart = True
+
+        active = not self.disable_mail
+        self.ensure_service(
+            "dovecot.service",
+            running=active,
+            enabled=active,
+        )
+
+
+def _pick_url(primary, fallback):
+    try:
+        req = urllib.request.Request(primary, method="HEAD")
+        urllib.request.urlopen(req, timeout=10)
+        return primary
+    except Exception:
+        return fallback
+
+
+def _download_dovecot_package(package: str, arch: str) -> tuple[str | None, bool]:
+    """Download a dovecot .deb if needed, return (path, changed)."""
+    arch = "amd64" if arch == "x86_64" else arch
+    arch = "arm64" if arch == "aarch64" else arch
+
+    pkg_name = f"dovecot-{package}"
+    sha256 = DOVECOT_SHA256.get((package, arch))
+    if sha256 is None:
+        op = apt.packages(packages=[pkg_name])
+        return None, bool(getattr(op, "changed", False))
+
+    installed_versions = host.get_fact(DebPackages).get(pkg_name, [])
+    if DOVECOT_PACKAGE_VERSION in installed_versions:
+        return None, False
+
+    url_version = DOVECOT_VERSION.replace("+", "%2B")
+    deb_base = f"{pkg_name}_{url_version}_{arch}.deb"
+    primary_url = f"https://download.delta.chat/dovecot/{deb_base}"
+    fallback_url = f"https://github.com/chatmail/dovecot/releases/download/upstream%2F{url_version}/{deb_base}"
+    url = _pick_url(primary_url, fallback_url)
+    deb_filename = f"/root/{deb_base}"
+
+    files.download(
+        name=f"Download {pkg_name}",
+        src=url,
+        dest=deb_filename,
+        sha256sum=sha256,
+        cache_time=60 * 60 * 24 * 365 * 10,  # never redownload the package
+    )
+
+    return deb_filename, True
+
+
+def _configure_dovecot(deployer, config: Config, debug: bool = False):
+    """Configures Dovecot IMAP server."""
+    deployer.put_template(
+        "dovecot/dovecot.conf.j2",
+        "/etc/dovecot/dovecot.conf",
+        config=config,
+        debug=debug,
+        disable_ipv6=config.disable_ipv6,
+    )
+    deployer.put_template("dovecot/auth.lua.j2", "/etc/dovecot/auth.lua", config=config)
+    deployer.remove_file("/etc/dovecot/auth.conf")
+    deployer.put_file(
+        "dovecot/push_notification.lua", "/etc/dovecot/push_notification.lua"
+    )
+
+    # as per https://doc.dovecot.org/2.3/configuration_manual/os/
+    # it is recommended to set the following inotify limits
+    can_modify = not is_in_container()
+    for name in ("max_user_instances", "max_user_watches"):
+        key = f"fs.inotify.{name}"
+        value = host.get_fact(Sysctl).get(key, 0)
+        if value > 65534:
+            continue
+        if not can_modify:
+            print(
+                "\n!!!! refusing to attempt sysctl setting in containers\n"
+                f"!!!! dovecot: sysctl {key!r}={value}, should be >65534 for production setups\n"
+                "!!!!"
+            )
+            continue
+        server.sysctl(
+            name=f"Change {key}",
+            key=key,
+            value=65535,
+            persist=True,
+        )
+
+    deployer.ensure_line(
+        name="Set TZ environment variable",
+        path="/etc/environment",
+        line="TZ=:/etc/localtime",
+    )
+
+    deployer.put_file(
+        "service/10_restart_on_failure.conf",
+        "/etc/systemd/system/dovecot.service.d/10_restart.conf",
+    )
+
+    # Validate dovecot configuration before restart
+    if deployer.need_restart:
+        server.shell(
+            name="Validate dovecot configuration",
+            commands=["doveconf -n >/dev/null"],
+        )

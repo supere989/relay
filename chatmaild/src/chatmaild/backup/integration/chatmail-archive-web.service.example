@@ -1,0 +1,23 @@
+# Optional reference only: not registered or installed by cmdeploy.
+[Unit]
+Description=Optional mailbox owner archive portal
+After=network.target
+
+[Service]
+Type=simple
+User=vmail
+Group=vmail
+UMask=0077
+ExecStart=/usr/local/bin/chatmail-archive --config /etc/chatmail-archive.json web
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# Match the configured existing Maildir root. Proof writes only the private
+# nonsecret incarnation marker; workers retain read-only mailbox access.
+ReadWritePaths=/var/lib/chatmail-archive /home/vmail/mail
+TimeoutStopSec=40
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

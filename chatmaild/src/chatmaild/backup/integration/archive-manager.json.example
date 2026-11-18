@@ -1,0 +1,38 @@
+{
+  "database": "/var/lib/chatmail-archive-state/archive.sqlite",
+  "spool": "/var/lib/chatmail-archive-state/spool",
+  "chatmail_ini": "/usr/local/lib/chatmail/chatmail.ini",
+  "public_url": "https://archive.example.org",
+  "google_client_id": "REPLACE_WITH_PUBLIC_OAUTH_CLIENT_ID",
+  "google_client_secret_ref": "REPLACE_WITH_WALLET_REFERENCE",
+  "broker_argv": ["/usr/local/libexec/chatmail-archive-broker"],
+  "state_storage": {
+    "mount": "/var/lib/chatmail-archive-state",
+    "backing": "/var/lib/chatmail-archive-ciphertext/backing",
+    "epoch": "REPLACE_WITH_ENROLLED_32_HEX_STATE_EPOCH",
+    "uid": 10001,
+    "gid": 10001,
+    "attestation": "/run/chatmail-archive-state/mount.json",
+    "gocryptfs": "/usr/local/libexec/gocryptfs-2.6.1",
+    "gocryptfs_sha256": "37ab7ee7e3f27cf96ba414a02d61e7810c730a4f95d0c7ee050bf3dbd048bacc",
+    "unlock_ref": "REPLACE_WITH_WALLET_REFERENCE"
+  },
+  "manager": {
+    "profile": "/var/lib/chatmail-archive-state/bot",
+    "account_id": 0,
+    "rpc_server": "/usr/local/libexec/deltachat-rpc-server-2.69.0",
+    "rpc_sha256": "db1a2c08375c9c2e73c8d6009cc99094e642722a41d06370cdb4dc680247eaa0",
+    "signing_ref": "REPLACE_WITH_WALLET_REFERENCE",
+    "mailbox_ref": "REPLACE_WITH_WALLET_REFERENCE",
+    "attestation_socket": "/run/chatmail-archive-manager/context.sock",
+    "transport_settings": {
+      "imapServer": "mail.example.org",
+      "imapPort": 993,
+      "imapSecurity": "ssl",
+      "smtpServer": "mail.example.org",
+      "smtpPort": 465,
+      "smtpSecurity": "ssl",
+      "certificateChecks": "automatic"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+# Optional reference; no enrollment, migration, mounting or activation occurs
+# until separately reviewed installation. This helper alone is privileged.
+[Unit]
+Description=Optional encrypted archive state mount
+Before=chatmail-archive-manager.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+LimitCORE=0
+RuntimeDirectory=chatmail-archive-state
+RuntimeDirectoryMode=0755
+ExecStart=/usr/local/bin/chatmail-archive-state --config /etc/chatmail-archive.json mount
+# Stop dependent services/held descriptors first. This is an ordinary unmount;
+# busy failure requires investigation. Never use -z/-f or a permission fallback.
+ExecStop=/usr/bin/fusermount3 -u /var/lib/chatmail-archive-state
+Restart=no
+TimeoutStopSec=infinity
+SendSIGKILL=no
+# No private mount namespace: consumers validate this exact namespace.
+# Root broker endpoint/executable/config must be narrowly controlled; it must
+# never expose an unscoped wallet or log secret reply/stdin data.
+
+[Install]
+WantedBy=multi-user.target

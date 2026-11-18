@@ -1,6 +1,10 @@
 import pytest
 
-from chatmaild.config import read_config
+from chatmaild.config import (
+    is_valid_ipv4,
+    parse_size_mb,
+    read_config,
+)
 
 
 def test_read_config_basic(example_config):
@@ -9,37 +13,46 @@ def test_read_config_basic(example_config):
     assert not example_config.privacy_pdo and not example_config.privacy_postal
 
     inipath = example_config._inipath
-    inipath.write_text(inipath.read_text().replace("60", "37"))
+    inipath.write_text(
+        inipath.read_text().replace(
+            "#max_user_send_per_minute = 60",
+            "max_user_send_per_minute = 37",
+        )
+    )
     example_config = read_config(inipath)
     assert example_config.max_user_send_per_minute == 37
     assert example_config.mail_domain == "chat.example.org"
+    assert example_config.ipv4_relay is None
 
 
-def test_read_config_basic_using_defaults(tmp_path, maildomain):
+def test_read_config_ipv4(ipv4_config):
+    assert ipv4_config.ipv4_relay == "1.3.3.7"
+    assert ipv4_config.mail_domain == "[1.3.3.7]"
+
+
+def test_read_config_basic_using_defaults(tmp_path, example_maildomain):
     inipath = tmp_path.joinpath("chatmail.ini")
-    inipath.write_text(f"[params]\nmail_domain = {maildomain}")
+    inipath.write_text(f"[params]\nmail_domain = {example_maildomain}")
     example_config = read_config(inipath)
     assert example_config.max_user_send_per_minute == 60
     assert example_config.filtermail_smtp_port_incoming == 10081
+    assert example_config.filtermail_smtp_port == 10080
+    assert example_config.postfix_reinject_port == 10025
+    assert example_config.max_user_send_per_minute == 60
+    assert example_config.max_mailbox_size == "500M"
+    assert example_config.delete_mails_after == "20"
+    assert example_config.delete_large_after == "7"
+    assert example_config.username_min_length == 9
+    assert example_config.username_max_length == 9
+    assert example_config.password_min_length == 9
+    assert example_config.max_imap_connections == 10000
+    assert example_config.max_smtp_connections == 1000
+    assert example_config._unused_keys == []
 
 
-def test_read_config_testrun(make_config):
-    config = make_config("something.testrun.org")
-    assert config.mail_domain == "something.testrun.org"
-    assert len(config.privacy_postal.split("\n")) > 1
-    assert len(config.privacy_supervisor.split("\n")) > 1
-    assert len(config.privacy_pdo.split("\n")) > 1
-    assert config.privacy_mail == "privacy@testrun.org"
-    assert config.filtermail_smtp_port == 10080
-    assert config.postfix_reinject_port == 10025
-    assert config.max_user_send_per_minute == 60
-    assert config.max_mailbox_size == "100M"
-    assert config.delete_mails_after == "20"
-    assert config.username_min_length == 9
-    assert config.username_max_length == 9
-    assert config.password_min_length == 9
-    assert "privacy@testrun.org" in config.passthrough_recipients
-    assert config.passthrough_senders == []
+def test_config_unused_keys(make_config):
+    config = make_config("chat.example.org", {"passthrough_senders": "x@y.org"})
+    assert config._unused_keys == ["passthrough_senders"]
 
 
 def test_config_userstate_paths(make_config, tmp_path):
@@ -72,3 +85,79 @@ def test_config_userstate_paths(make_config, tmp_path):
 def test_config_max_message_size(make_config, tmp_path):
     config = make_config("something.testrun.org", dict(max_message_size="10000"))
     assert config.max_message_size == 10000
+
+
+def test_config_tls_default_acme(make_config):
+    config = make_config("chat.example.org")
+    assert config.tls_cert_mode == "acme"
+    assert config.tls_cert_path == "/var/lib/acme/live/chat.example.org/fullchain"
+    assert config.tls_key_path == "/var/lib/acme/live/chat.example.org/privkey"
+
+
+def test_config_tls_self(make_config):
+    config = make_config("_test.example.org")
+    assert config.tls_cert_mode == "self"
+    assert config.tls_cert_path == "/etc/ssl/certs/mailserver.pem"
+    assert config.tls_key_path == "/etc/ssl/private/mailserver.key"
+
+
+def test_config_tls_external(make_config):
+    config = make_config(
+        "chat.example.org",
+        {
+            "tls_external_cert_and_key": "/custom/fullchain.pem /custom/privkey.pem",
+        },
+    )
+    assert config.tls_cert_mode == "external"
+    assert config.tls_cert_path == "/custom/fullchain.pem"
+    assert config.tls_key_path == "/custom/privkey.pem"
+
+
+def test_config_tls_external_overrides_underscore(make_config):
+    config = make_config(
+        "_test.example.org",
+        {
+            "tls_external_cert_and_key": "/certs/fullchain.pem /certs/privkey.pem",
+        },
+    )
+    assert config.tls_cert_mode == "external"
+    assert config.tls_cert_path == "/certs/fullchain.pem"
+    assert config.tls_key_path == "/certs/privkey.pem"
+
+
+def test_config_tls_external_bad_format(make_config):
+    with pytest.raises(ValueError, match="two space-separated"):
+        make_config(
+            "chat.example.org",
+            {
+                "tls_external_cert_and_key": "/only/one/path.pem",
+            },
+        )
+
+
+def test_parse_size_mb():
+    assert parse_size_mb("500M") == 500
+    assert parse_size_mb("2G") == 2048
+    assert parse_size_mb("  1g  ") == 1024
+    assert parse_size_mb("100MB") == 100
+    assert parse_size_mb("256") == 256
+
+
+def test_max_mailbox_size_mb(make_config):
+    config = make_config("chat.example.org")
+    assert config.max_mailbox_size == "500M"
+    assert config.max_mailbox_size_mb == 500
+
+
+@pytest.mark.parametrize(
+    ["input", "result"],
+    [
+        ("example.org", False),
+        ("1.3.3.7", True),
+        ("fe::1", False),
+        ("ad.1e.dag.adf", False),
+        ("12394142", False),
+    ],
+)
+def test_is_valid_ipv4(input, result):
+    assert result == is_valid_ipv4(input)

@@ -42,6 +42,7 @@ def bootstrap_remote(gateway, remote=remote):
 
 def print_stderr(item="", end="\n"):
     print(item, file=sys.stderr, end=end)
+    sys.stderr.flush()
 
 
 class SSHExec:
@@ -70,10 +71,6 @@ class SSHExec:
                 raise self.FuncError(data)
 
     def logged(self, call, kwargs):
-        def log_progress(data):
-            sys.stderr.write(".")
-            sys.stderr.flush()
-
         title = call.__doc__
         if not title:
             title = call.__name__
@@ -82,6 +79,32 @@ class SSHExec:
             return self(call, kwargs, log_callback=print_stderr)
         else:
             print_stderr(title, end="")
-            res = self(call, kwargs, log_callback=log_progress)
+            res = self(call, kwargs, log_callback=remote.rshell.log_progress)
+            print_stderr()
+            return res
+
+
+class LocalExec:
+    FuncError = FuncError
+
+    def __init__(self, verbose=False):
+        self.verbose = verbose
+
+    def __call__(self, call, kwargs=None, log_callback=None):
+        if kwargs is None:
+            kwargs = {}
+        return call(**kwargs)
+
+    def logged(self, call, kwargs: dict):
+        title = call.__doc__
+        if not title:
+            title = call.__name__
+        where = "locally"
+        if self.verbose:
+            print_stderr(f"Running {where}: {title}(**{kwargs})")
+            return self(call, kwargs, log_callback=print_stderr)
+        else:
+            print_stderr(title, end="")
+            res = self(call, kwargs, log_callback=remote.rshell.log_progress)
             print_stderr()
             return res

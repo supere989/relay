@@ -1,0 +1,45 @@
+name: documentation preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'doc/**'
+      - 'scripts/build-docs.sh'
+      - '.github/workflows/docs-preview.yaml'
+
+permissions: {}
+
+jobs:
+  scripts:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    name: build 
+    runs-on: ubuntu-latest
+    env:
+      # Pin the repository links in the docs to this pull request's head commit
+      # so that linkcheck resolves files which only exist on the branch so far.
+      # see doc/conf.py
+      DOC_GITHUB_REF: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: initenv 
+        run: scripts/initenv.sh
+
+      - name: append venv/bin to PATH
+        run: echo `pwd`/venv/bin >>$GITHUB_PATH
+
+      - name: build documentation 
+        working-directory: doc
+        run: sphinx-build source build
+
+      - name: build documentation second time (for TOC)
+        working-directory: doc
+        run: sphinx-build source build
+
+      - name: check links 
+        working-directory: doc
+        run: sphinx-build --builder linkcheck source build
+

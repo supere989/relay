@@ -4,16 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chatmaild"
-version = "0.2"
+version = "0.3"
 dependencies = [
-  "aiosmtpd",
   "iniconfig",
-  "deltachat-rpc-server",
-  "deltachat-rpc-client",
   "filelock",
+  "psutil",
   "requests",
-  "crypt-r >= 3.13.1 ; python_version >= '3.11'",
+  "crypt-r >= 3.13.1 ; python_version >= '3.13'",
 ]
+
+[project.optional-dependencies]
+backup = ["google-auth>=2.40,<3"]
+manager = ["deltachat-rpc-client==2.69.0", "cryptography>=44"]
 
 [tool.setuptools]
 include-package-data = true
@@ -21,17 +23,19 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ['src']
 
+[tool.setuptools.package-data]
+"chatmaild.backup" = ["integration/*.example", "archive_manager/*", "archive_manager/vendor/*"]
+
 [project.scripts]
 doveauth = "chatmaild.doveauth:main"
 chatmail-metadata = "chatmaild.metadata:main"
-filtermail = "chatmaild.filtermail:main"
-echobot = "chatmaild.echo:main"
-chatmail-metrics = "chatmaild.metrics:main"
-delete_inactive_users = "chatmaild.delete_inactive_users:main"
+chatmail-expire = "chatmaild.expire:daily_expire_main"
+chatmail-quota-expire = "chatmaild.expire:quota_expire_main"
+chatmail-fsreport = "chatmaild.fsreport:main"
 lastlogin = "chatmaild.lastlogin:main"
-
-[project.entry-points.pytest11]
-"chatmaild.testplugin" = "chatmaild.tests.plugin"
+chatmail-archive = "chatmaild.backup.cli:main"
+chatmail-archive-manager = "chatmaild.backup.manager:main"
+chatmail-archive-state = "chatmaild.backup.manager_profile:main"
 
 [tool.pytest.ini_options]
 addopts = "-v -ra --strict-markers"
@@ -47,6 +51,9 @@ lint.select = [
   "PLC", # Pylint Convention
   "PLE", # Pylint Error
   "PLW", # Pylint Warning
+]
+lint.ignore = [
+  "PLC0415" # import-outside-top-level
 ]
 
 [tool.tox]
@@ -65,7 +72,11 @@ commands =
   ruff check src/
 
 [testenv]
+extras = backup,manager
 deps = pytest 
        pdbpp 
+       pytest-localserver
+       aiosmtpd
+       execnet
 commands = pytest -v -rsXx {posargs}
 """

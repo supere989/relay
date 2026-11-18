@@ -1,6 +1,400 @@
-# Changelog for chatmail deployment 
+# Changelog for chatmail deployment
 
-## untagged
+## [1.13.0] - 2026-09-22
+
+### Bug Fixes
+
+- Actually use UTC time instead of just seemingly using it
+
+### Documentation
+
+- Describe Madmail v2 as a Rust chatmail relay
+
+### Features
+
+- Serve an APPVERSIONS.json index file to clients via IMAP metadata
+- *(mtail)* Deploy filtermail.mtail and gate mtail rule copy on mtail_address
+- *(mtail)* Validate programs during deploy
+- Move doveauth from dictproxy to lua/http
+- Distinguish AUTHENTICATION_FAILED/UNAVAILABLE login failures
+
+### Miscellaneous Tasks
+
+- Try to fix lack of RFC822 item support in madmail and make CI pass
+- Un-hardcode executable paths in some systemd service files
+- Follow the new mtail release source, upgrade 3.0.8 to 3.4.9
+- *(cmdeploy)* Refactor all pins into pins.py
+- *(doc)* Use sphinx roles for referencing repository files and dirs
+- update deltachat-android link to 2.59.1
+
+### Testing
+
+- Integrate lua testing into regular pytest run for push notifications
+- Cleanup and allow a repo-root level "pytest -n6" to succeed.
+- [**breaking**] Remove global registration of pytest plugins
+
+## [1.12.0] - 2026-07-31
+
+### Breaking Changes
+
+- [**breaking**] Introduce configurable system limits to reject new address creation and limit imap/smtp connections.
+  Dovecot default connection limit lowered from 50k to 10k,
+  Postfix default connection limit lowered from 5k to 1k,
+  larger relays need to adjust their settings.
+
+### Features
+
+- Reduce maximal_queue_lifetime from 5d to 2d
+- Disable negative cache in unbound (#992)
+- *(mtail)* Add incoming_mailer_daemon_mail_count
+- *(postfix)* Disable processing of MIME headers
+- *(dovecot)* Advertise privacy_mail as admin contact, drop server comment
+
+### Bug Fixes
+
+- Set relay restrictions per smtpd service with default reject
+- Reduce maxproc for filtermail-transport LMTP client to 500
+- Core 2.50.0 does not have delete_server_after config anymore.
+- Check if all required ports are available for filtermail (#983)
+- Always deploy unbound.conf.d/chatmail.conf (#993)
+- Expire empty directories (#994)
+- Crypt-r dependency was declared for wrong Python version
+- Always overwrite /etc/resolv.conf, even if it is a symbolic link
+- Pass kwargs to files.put()
+- List Iroh proxy endpoints used by 0.35 and 1.0, drop stale /relay/probe from earlier versions
+- Fix port discovery when ss -tulpn shows dovecot before stats
+
+### Documentation
+
+- Add scripts/initenv.sh to upgrade instructions
+- Update overview diagrams (#995)
+- *(overview)* Remove mermaid styles from 'Accepting and delivering mail' (#1009)
+- *(README.md)* Clarify security enforcement (#1011)
+
+### Miscellaneous Tasks
+
+- *(ci)* Auto-trigger docker build on release tag push
+- *(acmetool)* Update let's encrypt ToS link to 1.8
+- *(ci)* Update doc staging upload path
+- *(ci)* Fix docs upload path
+
+### Refactor
+
+- *(postfix)* Remove unused "filter" lmtp service
+- Install dns-root-data instead of using unbound-anchor
+- *(deps)* Remove domain-validator dependency
+
+### Testing
+
+- Set socket security for IMAP and SMTP to "TLS" in "dclogin"
+
+## [1.11.0] - 2026-05-15
+
+### Breaking Changes
+
+- [**breaking**] Drop passthrough_sender and passthrough_recipients chatmail.ini options to eliminate one more source of unencrypted messages
+
+### Features
+
+- Use filtermail for delivery to remote MTAs
+- Expose metadata "maxsmtprecipients" value
+- Support setup without domain, with only an IPv4 address (#963)
+- *(doc/docker)* Introduce docker images in documentation
+- DKIM-sign bounce messages (mainly "user does not exist")
+- *(config)* Load default values from Config(), not chatmail.ini.f (#853)
+- Make turn_socket_path configurable, and cleanup tests and turnserver code.
+- Warn about any unused chatmail.ini parameter at the end of "cmdeploy run"
+
+### Bug Fixes
+
+- Make www tests work with editable instead of just plain installs
+- Use path with no leading slash for mxdeliv
+- Increase filtermail-transport concurrency limit
+- Fix #972 by increasing file descriptors for filtermail
+- *(mtail)* Correct boot ordering and deploy restart logic
+- *(cmdeploy)* Stop and disable unbound-resolvconf
+- *(nginx)* Properly redirect www to mail_domain
+- *(dns)* Query correct NS if MNAME server is hidden (#954)
+- Legacy token metadata storage used list type, but if no new setmetadata happened, the user would not be notified at all.
+- *(logging)* Log all http requests to syslog
+
+### Documentation
+
+- Document how to upgrade to new version (#965)
+
+### Other
+
+- *(deps)* Upgrade to filtermail v0.6.4
+
+### Refactor
+
+- Introduce automated change-tracking across deployers
+
+## 1.10.0 2026-04-30
+
+* start mtail after networking is fully up <https://github.com/chatmail/relay/pull/942>
+* support specifying custom filtermail binary through environment variable <https://github.com/chatmail/relay/pull/941>
+* add automated zizmor scanning of github workflows <https://github.com/chatmail/relay/pull/938>
+* added dispatch for *automated builds of chatmail relay docker images* <https://github.com/chatmail/relay/pull/934>
+* do not bind SMTP client sockets to public addresses <https://github.com/chatmail/relay/pull/932>
+* underline in docs that scripts/initenv.sh should be used for building the docs <https://github.com/chatmail/relay/pull/933>
+* automatic oldest-first message removal from mailboxes to always stay under max_mailbox_size <https://github.com/chatmail/relay/pull/929>
+* remove --slow from cmdeploy test <https://github.com/chatmail/relay/pull/931>
+* handle missing inotify sysctl keys in containers <https://github.com/chatmail/relay/pull/930>
+* replace resolvconf with static resolv.conf <https://github.com/chatmail/relay/pull/928>
+* disable fsync for LMTP and IMAP services <https://github.com/chatmail/relay/pull/925>
+* re-use cmlxc workflow, replacing CI with hetzner staging servers with local lxc containers <https://github.com/chatmail/relay/pull/917>
+* explicitly install resolvconf <https://github.com/chatmail/relay/pull/924>
+* detect stale dovecot binary and force restart in activate() <https://github.com/chatmail/relay/pull/922>
+* Rename filtermail_http_port to filtermail_http_port_incoming <https://github.com/chatmail/relay/pull/921>
+* consolidated is_in_container() check https://github.com/chatmail/relay/pull/920>
+* restart dovecot after package replacement (rebase, test condense) <https://github.com/chatmail/relay/pull/913>
+* Set permissions on dovecot pin prefs <https://github.com/chatmail/relay/pull/915>
+* Route `/mxdeliv/` to configurable port <https://github.com/chatmail/relay/pull/901>
+* fix VM detection, automated testing fixes, use newer chatmail-turn and move to standard BIND DNS zone format <https://github.com/chatmail/relay/pull/912>
+* Upgrade to filtermail 0.6.1 <https://github.com/chatmail/relay/pull/910>
+* pin dovecot packages to prevent apt upgrades <https://github.com/chatmail/relay/pull/908>
+* add rpc server to cmdeploy along with client <https://github.com/chatmail/relay/pull/906>
+* remove unused deps from chatmaild <https://github.com/chatmail/relay/pull/905>
+* set default smtp_tls_security_level to "verify" unconditionally <https://github.com/chatmail/relay/pull/902>
+* featprefer IPv4 in SMTP client <https://github.com/chatmail/relay/pull/900>
+* Install dovecot .deb packages atomically <https://github.com/chatmail/relay/pull/899>
+* stop installing cron package <https://github.com/chatmail/relay/pull/898>
+* Rewrite dovecot install logic, update <https://github.com/chatmail/relay/pull/862>
+* fix a test and some linting fixes <https://github.com/chatmail/relay/pull/897>
+* Disable IP verification on domain-literal addresses <https://github.com/chatmail/relay/pull/895>
+* disable installing recommended packages globally on the relay <https://github.com/chatmail/relay/pull/887>
+* multiple bug fixes across chatmaild and cmdeploy <https://github.com/chatmail/relay/pull/883>
+* remove /metrics from the website <https://github.com/chatmail/relay/pull/703>
+* add Prometheus textfile output to fsreport <https://github.com/chatmail/relay/pull/881>
+* chown opendkim: private key <https://github.com/chatmail/relay/pull/879>
+* make sure chatmail-metadata was started <https://github.com/chatmail/relay/pull/882>
+* dovecot update url <https://github.com/chatmail/relay/pull/880>
+* upgrade to filtermail v0.5.2 <https://github.com/chatmail/relay/pull/876>
+* download dovecot packages from github release <https://github.com/chatmail/relay/pull/875>
+* replace DKIM verification with filtermail v0.5 <https://github.com/chatmail/relay/pull/831>
+* remove CFFI deltachat bindings usage, and consolidate test support with rpc-bindings <https://github.com/chatmail/relay/pull/872>
+* prepare chatmaild/cmdeploy changes for Docker support <https://github.com/chatmail/relay/pull/857>
+* stabilize online benchmark timing adding rate-limit-aware cooldown between iterations <https://github.com/chatmail/relay/pull/867>
+* move rate-limit cooldown to benchmark fixture <https://github.com/chatmail/relay/pull/868>
+* reconfigure acmetool from redirector to proxy mode <https://github.com/chatmail/relay/pull/861>
+* make tests work with `--ssh-host localhost` <https://github.com/chatmail/relay/pull/856>
+* mark f-string with f prefix in test_expunged <https://github.com/chatmail/relay/pull/863>
+* install also if dovecot.service=False in SystemdEnabled Fact <https://github.com/chatmail/relay/pull/841>
+* Introduce support for self-signed chatmail relays <https://github.com/chatmail/relay/pull/855>
+* Strip Received headers before delivery <https://github.com/chatmail/relay/pull/849>
+* upgrade to filtermail v0.3 <https://github.com/chatmail/relay/pull/850>
+* fix link to Maddy and update madmail URL <https://github.com/chatmail/relay/pull/847>
+* accept self-signed certificates for IP-only relays <https://github.com/chatmail/relay/pull/846>
+* enforce sending from public IP addresses <https://github.com/chatmail/relay/pull/845>
+* port check: check addresses, fix single services <https://github.com/chatmail/relay/pull/844>
+* remediates issue with improper concat on resolver injection <https://github.com/chatmail/relay/pull/834>
+* ipv6 boolean not being respected during operations <https://github.com/chatmail/relay/pull/832>
+* upgrade to filtermail v0.2 by <https://github.com/chatmail/relay/pull/825>
+* fix link to filtermail <https://github.com/chatmail/relay/pull/824>
+* print timestamps when sending messages <https://github.com/chatmail/relay/pull/823>
+* fix flaky test_exceed_rate_limit <https://github.com/chatmail/relay/pull/822>
+* Replace filtermail with rust reimplementation <https://github.com/chatmail/relay/pull/808>
+* Set default internal SMTP ports in Config <https://github.com/chatmail/relay/pull/819>
+* separate metrics for incoming and outgoing messages <https://github.com/chatmail/relay/pull/820>
+* disable appending the Received header <https://github.com/chatmail/relay/pull/815>
+* fail on errors in postfix/dovecot config <https://github.com/chatmail/relay/pull/813>
+* tweak idle/hibernate metrics some more <https://github.com/chatmail/relay/pull/811>
+* add config flag to export statistics <https://github.com/chatmail/relay/pull/806>
+* add --website-only option to run subcommand <https://github.com/chatmail/relay/pull/768>
+* Strip DKIM-Signature header before LMTP <https://github.com/chatmail/relay/pull/803>
+* properly make sure that postfix gets restarted on failure <https://github.com/chatmail/relay/pull/802>
+* expire.py: use absolute path to maildirsize <https://github.com/chatmail/relay/pull/807>
+* pin Dovecot documentation URLs to version 2.3 <https://github.com/chatmail/relay/pull/800>
+* try to use "build machine" and "deployment server"  consistently  <https://github.com/chatmail/relay/pull/797>
+* adds instructions for migrating control machines <https://github.com/chatmail/relay/pull/795>
+* use consistent naming schema in getting started <https://github.com/chatmail/relay/pull/793>
+* remove jsok/serialize-workflow-action dependency <https://github.com/chatmail/relay/pull/790>
+* streamline migration guide wording, provide titled steps  <https://github.com/chatmail/relay/pull/789>
+* increases default max mailbox size <https://github.com/chatmail/relay/pull/792>
+* use daemon_name for OpenDKIM sign-verify decision instead of IP <https://github.com/chatmail/relay/pull/784>
+
+## 1.9.0 2025-12-18
+
+### Documentation
+
+- Add RELEASE.md and CONTRIBUTING.md
+- README update, mention Chatmail Cookbook project
+
+### Bug Fixes
+
+- Expire messages also from IMAP subfolders
+- Use absolute path instead of relative path in message expiration script
+- Restart Postfix and Dovecot automatically on failure
+- acmetool: Use a fixed name and `reconcile` instead of `want`
+
+### Features
+
+- Report DKIM error code in SMTP response
+- Remove development notice from the web pages
+
+### Miscellaneous Tasks
+
+- Update the heading in the CHANGELOG.md
+- Setup git-cliff
+- Run tests against ci-chatmail.testrun.org instead of nine.testrun.org
+- Cleanup remaining echobot code, remove echobot user from deployment and passthrough recipients
+
+## 1.8.0 2025-12-12
+
+- Add imap_compress option to chatmail.ini
+  ([#760](https://github.com/chatmail/relay/pull/760))
+
+- Remove echobot from relays 
+  ([#753](https://github.com/chatmail/relay/pull/753))
+
+- Fix `cmdeploy webdev`
+  ([#743](https://github.com/chatmail/relay/pull/743))
+
+- Add robots.txt to exclude all web crawlers
+  ([#732](https://github.com/chatmail/relay/pull/732))
+
+- acmetool: accept new Let's Encrypt ToS: https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf
+  ([#729](https://github.com/chatmail/relay/pull/729))
+
+- Organized cmdeploy into install, configure, and activate stages
+  ([#695](https://github.com/chatmail/relay/pull/695))
+
+- docs: move readme.md docs to sphinx documentation rendered at https://chatmail.at/doc/relay 
+  ([#711](https://github.com/chatmail/relay/pull/711))
+
+- acmetool: replace cronjob with a systemd timer
+  ([#719](https://github.com/chatmail/relay/pull/719))
+
+- remove xstore@testrun.org from default passthrough recipients
+  ([#722](https://github.com/chatmail/relay/pull/722))
+
+- don't deploy the website if there are merge conflicts in the www folder
+  ([#714](https://github.com/chatmail/relay/pull/714))
+
+- acmetool: use ECDSA keys instead of RSA
+  ([#689](https://github.com/chatmail/relay/pull/689))
+
+- Require TLS 1.2 for outgoing SMTP connections
+  ([#685](https://github.com/chatmail/relay/pull/685), [#730](https://github.com/chatmail/relay/pull/730))
+
+- require STARTTLS for incoming port 25 connections
+  ([#684](https://github.com/chatmail/relay/pull/684), [#730](https://github.com/chatmail/relay/pull/730))
+
+- filtermail: run CPU-intensive handle_DATA in a thread pool executor
+  ([#676](https://github.com/chatmail/relay/pull/676))
+
+- don't use the complicated logging module in filtermail to exclude a potential source of errors. 
+  ([#674](https://github.com/chatmail/relay/pull/674))
+
+- Specify nginx.conf to only handle `mail_domain`, www, and mta-sts domains
+  ([#636](https://github.com/chatmail/relay/pull/636))
+
+- Setup TURN server
+  ([#621](https://github.com/chatmail/relay/pull/621))
+
+- cmdeploy: make --ssh-host work with localhost
+  ([#659](https://github.com/chatmail/relay/pull/659))
+
+- Update iroh-relay to 0.35.0
+  ([#650](https://github.com/chatmail/relay/pull/650))
+
+- filtermail: accept mails from Protonmail
+  ([#616](https://github.com/chatmail/relay/pull/616))
+
+- Ignore all RCPT TO: parameters
+  ([#651](https://github.com/chatmail/relay/pull/651))
+
+- Increase opendkim DNS Timeout from 5 to 60 seconds
+  ([#672](https://github.com/chatmail/relay/pull/672))
+
+- Add config parameter for Let's Encrypt ACME email
+  ([#663](https://github.com/chatmail/relay/pull/663))
+
+- Use max username length in newemail.py, not min
+  ([#648](https://github.com/chatmail/relay/pull/648))
+
+- Add startup for `fcgiwrap.service` because sometimes it did not start automatically.
+  ([#657](https://github.com/chatmail/relay/pull/657))
+
+- Add `cmdeploy init --force` command for recreating chatmail.ini
+  ([#656](https://github.com/chatmail/relay/pull/656))
+
+- Increase maxproc for reinjecting ports from 10 to 100
+  ([#646](https://github.com/chatmail/relay/pull/646))
+
+- Allow ports 143 and 993 to be used by `dovecot` process
+  ([#639](https://github.com/chatmail/relay/pull/639))
+
+- Add `--skip-dns-check` argument to `cmdeploy run` command, which disables DNS record checking before installation.
+  ([#661](https://github.com/chatmail/relay/pull/661))
+
+- Rework expiry of message files and mailboxes in Python 
+  to only do a single iteration over sometimes millions of messages
+  instead of doing "find" commands that iterate 9 times over the messages. 
+  Provide an "fsreport" CLI for more fine grained analysis of message files. 
+  ([#637](https://github.com/chatmail/relay/pull/637))
+
+
+## 1.7.0 2025-09-11
+
+- Make www upload path configurable
+  ([#618](https://github.com/chatmail/relay/pull/618))
+
+- Check whether GCC is installed in initenv.sh
+  ([#608](https://github.com/chatmail/relay/pull/608))
+
+- Expire push notification tokens after 90 days
+  ([#583](https://github.com/chatmail/relay/pull/583))
+
+- Use official `mtail` binary instead of `mtail` package
+  ([#581](https://github.com/chatmail/relay/pull/581))
+
+- dovecot: install from download.delta.chat instead of openSUSE Build Service
+  ([#590](https://github.com/chatmail/relay/pull/590))
+
+- Reconfigure Dovecot imap-login service to high-performance mode
+  ([#578](https://github.com/chatmail/relay/pull/578))
+
+- Set timezone to improve dovecot performance
+  ([#584](https://github.com/chatmail/relay/pull/584))
+
+- Increase nginx connection limits
+  ([#576](https://github.com/chatmail/relay/pull/576))
+
+- If `dns-utils` needs to be installed before cmdeploy run, apt update to make sure it works
+  ([#560](https://github.com/chatmail/relay/pull/560))
+
+- filtermail: respect config message size limit
+  ([#572](https://github.com/chatmail/relay/pull/572))
+
+- Don't deploy if one of the ports used for chatmail relay services is occupied by an unexpected process
+  ([#568](https://github.com/chatmail/relay/pull/568))
+
+- Add config value after how many days large files are deleted
+  ([#555](https://github.com/chatmail/relay/pull/555))
+
+- cmdeploy: push relay version to /etc/chatmail-version
+  ([#573](https://github.com/chatmail/relay/pull/573))
+
+- filtermail: allow partial body length in OpenPGP payloads
+  ([#570](https://github.com/chatmail/relay/pull/570))
+
+- chatmaild: allow echobot to receive unencrypted messages by default
+  ([#556](https://github.com/chatmail/relay/pull/556))
+
+
+## 1.6.0 2025-04-11
+
+- Handle Port-25 connect errors more gracefully (common with VPNs)
+  ([#552](https://github.com/chatmail/relay/pull/552))
+
+- Avoid "acmetool not found" during initial run
+  ([#550](https://github.com/chatmail/relay/pull/550))
+
+- Fix timezone handling such that client/servers do not need to use
+  same timezone. 
+  ([#553](https://github.com/chatmail/relay/pull/553))
 
 - Enforce end-to-end encryption for incoming messages. 
   New user address mailboxes now get a `enforceE2EEincoming` file 
@@ -14,12 +408,21 @@
 - Enforce end-to-end encryption between local addresses 
   ([#535](https://github.com/chatmail/server/pull/535))
 
+- unbound: check that port 53 is not occupied by a different process
+  ([#537](https://github.com/chatmail/server/pull/537))
+
+- unbound: before unbound is there, use 9.9.9.9 for resolving
+  ([#518](https://github.com/chatmail/relay/pull/518))
+
 - Limit the bind for the HTTPS server on 8443 to 127.0.0.1 
   ([#522](https://github.com/chatmail/server/pull/522))
   ([#532](https://github.com/chatmail/server/pull/532))
 
 - Send SNI when connecting to outside servers
   ([#524](https://github.com/chatmail/server/pull/524))
+
+- postfix master.cf: use 127.0.0.1 for consistency
+  ([#544](https://github.com/chatmail/relay/pull/544))
 
 - Pass through `original_content` instead of `content` in filtermail
   ([#509](https://github.com/chatmail/server/pull/509))
