@@ -37,7 +37,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y age
-          pipx run tox
+          # Synthetic Manager state must be in RAM under /tmp.
+          test_tmp=$(mktemp -d /tmp/chatmaild-tests.XXXXXXXX)
+          sudo mount -t tmpfs -o "size=2G,nosuid,nodev,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$test_tmp"
+          trap 'sudo umount "$test_tmp" && rmdir "$test_tmp"' EXIT
+          pipx run tox -- --basetemp="$test_tmp/pytest"
 
   scripts:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}

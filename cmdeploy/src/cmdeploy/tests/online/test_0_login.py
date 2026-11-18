@@ -91,7 +91,7 @@ def test_concurrent_logins_same_account(
 
 def test_no_vrfy(cmfactory, chatmail_config, maildomain):
     ac = cmfactory.get_online_account()
-    addr = ac.get_config("addr")
+    addr = cmfactory.get_test_transport(ac)["addr"]
 
     s = smtplib.SMTP(maildomain)
     s.starttls()

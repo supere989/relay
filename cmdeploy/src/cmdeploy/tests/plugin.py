@@ -326,6 +326,14 @@ class ChatmailACFactory:
         """Create, configure and bring online a single account."""
         return self.get_online_accounts(1, domain)[0]
 
+    @staticmethod
+    def get_test_transport(account):
+        """Return the single relay transport set up for this test account."""
+        transports = account.list_transports()
+        if len(transports) != 1:
+            pytest.fail("expected one configured test relay transport")
+        return transports[0]
+
     def get_online_accounts(self, num, domain=None):
         """Create multiple online accounts in parallel."""
         domain = domain or self._maildomain
