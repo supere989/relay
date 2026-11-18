@@ -12,9 +12,8 @@ from chatmaild.config import read_config
 from pyinfra import facts, host, logger
 from pyinfra.api import FactBase
 from pyinfra.facts import hardware
-from pyinfra.facts.files import Sha256File
 from pyinfra.facts.systemd import SystemdEnabled
-from pyinfra.operations import apt, dnf, files, pip, server, systemd
+from pyinfra.operations import apt, files, pip, server, systemd
 
 from cmdeploy.cmdeploy import Out
 
@@ -25,11 +24,11 @@ from .basedeploy import (
     activate_remote_units,
     blocked_service_startup,
     configure_remote_units,
-    get_pkg_mgr,
-    get_resource,
     has_systemd,
-    is_el10,
     is_in_container,
+    package_manager,
+    platform_packages,
+    require_runtime_profile,
 )
 from .dovecot.deployer import DovecotDeployer
 from .external.deployer import ExternalTlsDeployer
@@ -37,6 +36,7 @@ from .filtermail.deployer import FiltermailDeployer
 from .mtail.deployer import MtailDeployer
 from .nginx.deployer import NginxDeployer
 from .opendkim.deployer import OpendkimDeployer
+from .pins import IROH_ARTIFACTS, TURN_ARTIFACTS
 from .postfix.deployer import PostfixDeployer
 from .selfsigned.deployer import SelfSignedTlsDeployer
 from .www import build_webpages, find_merge_conflict, get_paths
@@ -84,26 +84,22 @@ def remove_legacy_artifacts():
         )
 
 
-def _install_remote_venv_with_chatmaild() -> None:
+def _install_remote_venv_with_chatmaild(deployer) -> None:
     remove_legacy_artifacts()
     dist_file = _build_chatmaild(dist_dir=Path("chatmaild/dist"))
     remote_base_dir = "/usr/local/lib/chatmaild"
     remote_dist_file = f"{remote_base_dir}/dist/{dist_file.name}"
     remote_venv_dir = f"{remote_base_dir}/venv"
-    root_owned = dict(user="root", group="root", mode="644")
-    pkg_mgr = get_pkg_mgr()
 
-    pkg_mgr.packages(
-        name=f"{pkg_mgr.__name__.split('.')[-1]} install python3-virtualenv",
-        packages=["python3-virtualenv" if not is_el10() else "python3-devel"],
+    package_manager().packages(
+        name="apt install python3-virtualenv",
+        packages=platform_packages("python-venv"),
     )
 
-    files.put(
-        name="Upload chatmaild source package",
+    deployer.ensure_directory(f"{remote_base_dir}/dist")
+    deployer.put_file(
         src=dist_file.open("rb"),
         dest=remote_dist_file,
-        create_remote_dir=True,
-        **root_owned,
     )
 
     pip.virtualenv(
@@ -112,9 +108,9 @@ def _install_remote_venv_with_chatmaild() -> None:
         always_copy=True,
     )
 
-    pkg_mgr.packages(
+    package_manager().packages(
         name="install gcc and headers to build crypt_r source package",
-        packages=["gcc", "python3-dev" if not is_el10() else "python3-devel"],
+        packages=platform_packages("python-build"),
     )
 
     server.shell(
@@ -125,52 +121,53 @@ def _install_remote_venv_with_chatmaild() -> None:
     )
 
 
-def _configure_remote_venv_with_chatmaild(config) -> None:
+def _configure_remote_venv_with_chatmaild(deployer, config) -> None:
     remote_base_dir = "/usr/local/lib/chatmaild"
     remote_chatmail_inipath = f"{remote_base_dir}/chatmail.ini"
-    root_owned = dict(user="root", group="root", mode="644")
 
-    files.put(
-        name=f"Upload {remote_chatmail_inipath}",
+    deployer.put_file(
         src=config._getbytefile(),
         dest=remote_chatmail_inipath,
-        **root_owned,
     )
 
-    files.file(
-        path="/etc/cron.d/chatmail-metrics",
-        present=False,
-    )
-    files.file(
-        path="/var/www/html/metrics",
-        present=False,
-    )
+    deployer.remove_file("/etc/cron.d/chatmail-metrics")
+    deployer.remove_file("/var/www/html/metrics")
 
 
 class UnboundDeployer(Deployer):
     def __init__(self, config):
         self.config = config
-        self.need_restart = False
 
     def install(self):
         # On an IPv4-only system, if unbound is started but not configured,
         # it causes subsequent steps to fail to resolve hosts.
-        pkg_mgr = get_pkg_mgr()
         with blocked_service_startup():
-            pkg_mgr.packages(
+            # dns-root-data is an optional package
+            # that contains /usr/share/dns/root.key
+            #
+            # This file is copied into /var/lib/unbound/root.key
+            # at the start of "unbound" systemd unit
+            # by /usr/libexec/unbound-helper shell script
+            # from the "unbound" package as of version 1.17.1-2+deb12u4
+            #
+            # The same /var/lib/unbound/root.key can be retrieved directly
+            # following the procedure from
+            # <https://www.rfc-editor.org/info/rfc7958/#section-3.1>
+            # with "unbound-anchor -a /var/lib/unbound/root.key"
+            # We don't install and use "unbound-anchor".
+            apt.packages(
                 name="Install unbound",
-                packages=["unbound", "unbound-anchor" if not is_el10() else "unbound", "dnsutils" if not is_el10() else "bind-utils"],
+                packages=["unbound", "dns-root-data", "dnsutils"],
             )
 
     def configure(self):
         # Remove dynamic resolver managers that compete for /etc/resolv.conf.
-        if not is_el10():
-            apt.packages(
-                name="Purge resolvconf",
-                packages=["resolvconf"],
-                present=False,
-                extra_uninstall_args="--purge",
-            )
+        apt.packages(
+            name="Purge resolvconf",
+            packages=["resolvconf"],
+            present=False,
+            extra_uninstall_args="--purge",
+        )
         # systemd-resolved can't be purged due to dependencies; stop and mask.
         server.shell(
             name="Stop and mask systemd-resolved",
@@ -181,41 +178,19 @@ class UnboundDeployer(Deployer):
         )
         # Configure unbound resolver with Quad9 fallback and a trailing newline
         # (SolusVM bug).
-        files.put(
-            name="Write static resolv.conf",
+        self.put_file(
             src=BytesIO(b"nameserver 127.0.0.1\nnameserver 9.9.9.9\n"),
             dest="/etc/resolv.conf",
-            user="root",
-            group="root",
-            mode="644",
+            force=True,
         )
-        server.shell(
-            name="Generate root keys for validating DNSSEC",
-            commands=[
-                "unbound-anchor -a /var/lib/unbound/root.key || true",
-            ],
+        self.ensure_directory(
+            path="/etc/unbound/unbound.conf.d",
         )
-        if self.config.disable_ipv6:
-            files.directory(
-                path="/etc/unbound/unbound.conf.d",
-                present=True,
-                user="root",
-                group="root",
-                mode="755",
-            )
-            conf = files.put(
-                src=get_resource("unbound/unbound.conf.j2"),
-                dest="/etc/unbound/unbound.conf.d/chatmail.conf",
-                user="root",
-                group="root",
-                mode="644",
-            )
-        else:
-            conf = files.file(
-                path="/etc/unbound/unbound.conf.d/chatmail.conf",
-                present=False,
-            )
-        self.need_restart |= conf.changed
+        self.put_template(
+            "unbound/unbound.conf.j2",
+            "/etc/unbound/unbound.conf.d/chatmail.conf",
+            disable_ipv6=self.config.disable_ipv6,
+        )
 
     def activate(self):
         server.shell(
@@ -225,27 +200,25 @@ class UnboundDeployer(Deployer):
             ],
         )
 
-        systemd.service(
-            name="Start and enable unbound",
-            service="unbound.service",
-            running=True,
-            enabled=True,
-            restarted=self.need_restart,
+        self.ensure_service("unbound.service")
+
+        self.ensure_service(
+            "unbound-resolvconf.service",
+            running=False,
+            enabled=False,
         )
 
 
 class MtastsDeployer(Deployer):
     def configure(self):
         # Remove configuration.
-        files.file("/etc/mta-sts-daemon.yml", present=False)
-        files.directory("/usr/local/lib/postfix-mta-sts-resolver", present=False)
-        files.file("/etc/systemd/system/mta-sts-daemon.service", present=False)
+        self.remove_file("/etc/mta-sts-daemon.yml")
+        self.remove_directory("/usr/local/lib/postfix-mta-sts-resolver")
+        self.remove_file("/etc/systemd/system/mta-sts-daemon.service")
 
     def activate(self):
-        systemd.service(
-            name="Stop MTA-STS daemon",
-            service="mta-sts-daemon.service",
-            daemon_reload=True,
+        self.ensure_service(
+            "mta-sts-daemon.service",
             running=False,
             enabled=False,
         )
@@ -256,14 +229,7 @@ class WebsiteDeployer(Deployer):
         self.config = config
 
     def install(self):
-        files.directory(
-            name="Ensure /var/www exists",
-            path="/var/www",
-            user="root",
-            group="root",
-            mode="755",
-            present=True,
-        )
+        self.ensure_directory("/var/www")
 
     def configure(self):
         www_path, src_dir, build_dir = get_paths(self.config)
@@ -289,20 +255,24 @@ class WebsiteDeployer(Deployer):
 
 class LegacyRemoveDeployer(Deployer):
     def install(self):
-        pkg_mgr = get_pkg_mgr()
-        pkg_mgr.packages(name="Remove rspamd", packages="rspamd", present=False)
+        apt.packages(name="Remove rspamd", packages="rspamd", present=False)
+
+        # unbound-anchor was used to download /var/lib/unbound/root.key
+        # It is replaced by dns-root-data which contains /usr/share/dns/root.key.
+        # unbound systemd unit copies /usr/share/dns/root.key
+        # into /var/lib/unbound/root.key automatically on start
+        # as long as /usr/share/dns/root.key is present.
+        apt.packages(
+            name="Remove unbound-anchor", packages="unbound-anchor", present=False
+        )
 
         # remove historic expunge script
         # which is now implemented through a systemd timer (chatmail-expire)
-        files.file(
-            path="/etc/cron.d/expunge",
-            present=False,
-        )
+        self.remove_file("/etc/cron.d/expunge")
 
         # Remove OBS repository key that is no longer used.
-        files.file("/etc/apt/keyrings/obs-home-deltachat.gpg", present=False)
-        files.line(
-            name="Remove DeltaChat OBS home repository from sources.list",
+        self.remove_file("/etc/apt/keyrings/obs-home-deltachat.gpg")
+        self.ensure_line(
             path="/etc/apt/sources.list",
             line="deb [signed-by=/etc/apt/keyrings/obs-home-deltachat.gpg] https://download.opensuse.org/repositories/home:/deltachat/Debian_12/ ./",
             escape_regex_characters=True,
@@ -310,11 +280,7 @@ class LegacyRemoveDeployer(Deployer):
         )
 
         # prior relay versions used filelogging
-        files.directory(
-            name="Ensure old logs on disk are deleted",
-            path="/var/log/journal/",
-            present=False,
-        )
+        self.remove_directory("/var/log/journal/")
         # remove echobot if it is still running
         if has_systemd() and host.get_fact(SystemdEnabled).get("echobot.service"):
             systemd.service(
@@ -341,126 +307,70 @@ def check_config(config):
 
 
 class TurnDeployer(Deployer):
+    bin_path = "/usr/local/bin/chatmail-turn"
+
     def __init__(self, mail_domain):
         self.mail_domain = mail_domain
         self.units = ["turnserver"]
 
     def install(self):
-        (url, sha256sum) = {
-            "x86_64": (
-                "https://github.com/chatmail/chatmail-turn/releases/download/v0.4/chatmail-turn-x86_64-linux",
-                "1ec1f5c50122165e858a5a91bcba9037a28aa8cb8b64b8db570aa457c6141a8a",
-            ),
-            "aarch64": (
-                "https://github.com/chatmail/chatmail-turn/releases/download/v0.4/chatmail-turn-aarch64-linux",
-                "0fb3e792419494e21ecad536464929dba706bb2c88884ed8f1788141d26fc756",
-            ),
-        }[host.get_fact(facts.server.Arch)]
-
-        existing_sha256sum = host.get_fact(Sha256File, "/usr/local/bin/chatmail-turn")
-        if existing_sha256sum != sha256sum:
-            server.shell(
-                name="Download chatmail-turn",
-                commands=[
-                    f"(curl -L {url} >/usr/local/bin/chatmail-turn.new && (echo '{sha256sum} /usr/local/bin/chatmail-turn.new' | sha256sum -c) && mv /usr/local/bin/chatmail-turn.new /usr/local/bin/chatmail-turn)",
-                    "chmod 755 /usr/local/bin/chatmail-turn",
-                ],
-            )
+        (url, sha256sum) = TURN_ARTIFACTS[host.get_fact(facts.server.Arch)]
+        self.download_executable(url, self.bin_path, sha256sum)
 
     def configure(self):
-        configure_remote_units(self.mail_domain, self.units)
+        configure_remote_units(
+            self, self.mail_domain, self.units, bin_path=self.bin_path
+        )
 
     def activate(self):
-        activate_remote_units(self.units)
+        activate_remote_units(self, self.units)
 
 
 class IrohDeployer(Deployer):
+    bin_path = "/usr/local/bin/iroh-relay"
+    config_path = "/etc/iroh-relay.toml"
+
     def __init__(self, enable_iroh_relay):
         self.enable_iroh_relay = enable_iroh_relay
 
     def install(self):
-        (url, sha256sum) = {
-            "x86_64": (
-                "https://github.com/n0-computer/iroh/releases/download/v0.35.0/iroh-relay-v0.35.0-x86_64-unknown-linux-musl.tar.gz",
-                "45c81199dbd70f8c4c30fef7f3b9727ca6e3cea8f2831333eeaf8aa71bf0fac1",
-            ),
-            "aarch64": (
-                "https://github.com/n0-computer/iroh/releases/download/v0.35.0/iroh-relay-v0.35.0-aarch64-unknown-linux-musl.tar.gz",
-                "f8ef27631fac213b3ef668d02acd5b3e215292746a3fc71d90c63115446008b1",
-            ),
-        }[host.get_fact(facts.server.Arch)]
-
-        existing_sha256sum = host.get_fact(Sha256File, "/usr/local/bin/iroh-relay")
-        if existing_sha256sum != sha256sum:
-            server.shell(
-                name="Download iroh-relay",
-                commands=[
-                    f"(curl -L {url} | gunzip | tar -x -f - ./iroh-relay -O >/usr/local/bin/iroh-relay.new && (echo '{sha256sum} /usr/local/bin/iroh-relay.new' | sha256sum -c) && mv /usr/local/bin/iroh-relay.new /usr/local/bin/iroh-relay)",
-                    "chmod 755 /usr/local/bin/iroh-relay",
-                ],
-            )
-
-            self.need_restart = True
+        (url, sha256sum) = IROH_ARTIFACTS[host.get_fact(facts.server.Arch)]
+        self.download_executable(
+            url,
+            self.bin_path,
+            sha256sum,
+            extract="gunzip | tar -xf - ./iroh-relay -O",
+        )
 
     def configure(self):
-        systemd_unit = files.put(
-            name="Upload iroh-relay systemd unit",
-            src=get_resource("iroh-relay.service"),
-            dest="/etc/systemd/system/iroh-relay.service",
-            user="root",
-            group="root",
-            mode="644",
+        self.ensure_systemd_unit(
+            "iroh-relay.service.j2",
+            bin_path=self.bin_path,
+            config_path=self.config_path,
         )
-        self.need_restart |= systemd_unit.changed
-
-        iroh_config = files.put(
-            name="Upload iroh-relay config",
-            src=get_resource("iroh-relay.toml"),
-            dest="/etc/iroh-relay.toml",
-            user="root",
-            group="root",
-            mode="644",
-        )
-        self.need_restart |= iroh_config.changed
+        self.put_file("iroh-relay.toml", self.config_path)
 
     def activate(self):
-        systemd.service(
-            name="Start and enable iroh-relay",
-            service="iroh-relay.service",
-            running=True,
+        self.ensure_service(
+            "iroh-relay.service",
             enabled=self.enable_iroh_relay,
-            restarted=self.need_restart,
         )
-        self.need_restart = False
 
 
 class JournaldDeployer(Deployer):
     def configure(self):
-        journald_conf = files.put(
-            name="Configure journald",
-            src=get_resource("journald.conf"),
-            dest="/etc/systemd/journald.conf",
-            user="root",
-            group="root",
-            mode="644",
-        )
-        self.need_restart = journald_conf.changed
+        self.put_file("journald.conf", "/etc/systemd/journald.conf")
 
     def activate(self):
-        systemd.service(
-            name="Start and enable journald",
-            service="systemd-journald.service",
-            running=True,
-            enabled=True,
-            restarted=self.need_restart,
-        )
-        self.need_restart = False
+        self.ensure_service("systemd-journald.service")
 
 
 class ChatmailVenvDeployer(Deployer):
     def __init__(self, config):
         self.config = config
         self.units = (
+            # doveauth must restart when chatmaild/ini file changes
+            "doveauth",
             "chatmail-metadata",
             "lastlogin",
             "chatmail-expire",
@@ -470,14 +380,14 @@ class ChatmailVenvDeployer(Deployer):
         )
 
     def install(self):
-        _install_remote_venv_with_chatmaild()
+        _install_remote_venv_with_chatmaild(self)
 
     def configure(self):
-        _configure_remote_venv_with_chatmaild(self.config)
-        configure_remote_units(self.config.mail_domain, self.units)
+        _configure_remote_venv_with_chatmaild(self, self.config)
+        configure_remote_units(self, self.config.mail_domain_bare, self.units)
 
     def activate(self):
-        activate_remote_units(self.units)
+        activate_remote_units(self, self.units)
 
 
 class ChatmailDeployer(Deployer):
@@ -491,38 +401,29 @@ class ChatmailDeployer(Deployer):
         self.mail_domain = config.mail_domain
 
     def install(self):
-        pkg_mgr = get_pkg_mgr()
-        if not is_el10():
-            files.put(
-                name="Disable installing recommended packages globally",
-                src=BytesIO(b'APT::Install-Recommends "false";\n'),
-                dest="/etc/apt/apt.conf.d/00InstallRecommends",
-                user="root",
-                group="root",
-                mode="644",
-            )
-            apt.update(name="apt update", cache_time=24 * 3600)
-            apt.upgrade(name="upgrade apt packages", auto_remove=True)
+        self.put_file(
+            src=BytesIO(b'APT::Install-Recommends "false";\n'),
+            dest="/etc/apt/apt.conf.d/00InstallRecommends",
+        )
+        apt.update(name="apt update", cache_time=24 * 3600)
+        apt.upgrade(name="upgrade apt packages", auto_remove=True)
 
-        pkg_mgr.packages(
+        apt.packages(
             name="Install curl",
             packages=["curl"],
         )
 
-        pkg_mgr.packages(
+        apt.packages(
             name="Install rsync",
             packages=["rsync"],
         )
 
     def configure(self):
         # metadata crashes if the mailboxes dir does not exist
-        files.directory(
-            name="Ensure vmail mailbox directory exists",
-            path=str(self.config.mailboxes_dir),
-            user="vmail",
-            group="vmail",
+        self.ensure_directory(
+            str(self.config.mailboxes_dir),
+            owner="vmail",
             mode="700",
-            present=True,
         )
 
         # This file is used by auth proxy.
@@ -537,19 +438,13 @@ class ChatmailDeployer(Deployer):
 
 class FcgiwrapDeployer(Deployer):
     def install(self):
-        pkg_mgr = get_pkg_mgr()
-        pkg_mgr.packages(
+        apt.packages(
             name="Install fcgiwrap",
             packages=["fcgiwrap"],
         )
 
     def activate(self):
-        systemd.service(
-            name="Start and enable fcgiwrap",
-            service="fcgiwrap.service",
-            running=True,
-            enabled=True,
-        )
+        self.ensure_service("fcgiwrap.service")
 
 
 class GithashDeployer(Deployer):
@@ -562,12 +457,7 @@ class GithashDeployer(Deployer):
             git_diff = subprocess.check_output(["git", "diff"]).decode()
         except Exception:
             git_diff = ""
-        files.put(
-            name="Upload chatmail relay git commit hash",
-            src=StringIO(git_hash + git_diff),
-            dest="/etc/chatmail-version",
-            mode="700",
-        )
+        self.put_file(src=StringIO(git_hash + git_diff), dest="/etc/chatmail-version")
 
 
 def get_tls_deployer(config, mail_domain):
@@ -591,20 +481,27 @@ def deploy_chatmail(config_path: Path, disable_mail: bool, website_only: bool) -
     :param disable_mail: whether to disable postfix & dovecot
     :param website_only: if True, only deploy the website
     """
+    require_runtime_profile()
     config = read_config(config_path)
     check_config(config)
-    mail_domain = config.mail_domain
+    bare_host = config.mail_domain_bare
 
     if website_only:
         Deployment().perform_stages([WebsiteDeployer(config)])
         return
 
     # Check if mtail_address interface is available (if configured)
-    if config.mtail_address and config.mtail_address not in ('127.0.0.1', '::1', 'localhost'):
+    if config.mtail_address and config.mtail_address not in (
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    ):
         ipv4_addrs = host.get_fact(hardware.Ipv4Addrs)
         all_addresses = [addr for addrs in ipv4_addrs.values() for addr in addrs]
         if config.mtail_address not in all_addresses:
-            Out().red(f"Deploy failed: mtail_address {config.mtail_address} is not available (VPN up?).\n")
+            Out().red(
+                f"Deploy failed: mtail_address {config.mtail_address} is not available (VPN up?).\n"
+            )
             exit(1)
 
     if not is_in_container():
@@ -623,15 +520,17 @@ def deploy_chatmail(config_path: Path, disable_mail: bool, website_only: bool) -
             ("nginx", 443),
             (["master", "smtpd"], 465),
             (["master", "smtpd"], 587),
-            (["imap-login", "dovecot"], 993),
+            (["dovecot", "imap-login"], 993),
             ("iroh-relay", 3340),
             ("mtail", 3903),
-            ("stats", 3904),
+            (["dovecot", "stats"], 3904),
             ("nginx", 8443),
             (["master", "smtpd"], config.postfix_reinject_port),
             (["master", "smtpd"], config.postfix_reinject_port_incoming),
             ("filtermail", config.filtermail_smtp_port),
             ("filtermail", config.filtermail_smtp_port_incoming),
+            ("filtermail", config.filtermail_http_port_incoming),
+            ("filtermail", config.filtermail_lmtp_port_transport),
         ]
         for service, port in port_services:
             print(f"Checking if port {port} is available for {service}...")
@@ -644,7 +543,7 @@ def deploy_chatmail(config_path: Path, disable_mail: bool, website_only: bool) -
                     )
                     exit(1)
 
-    tls_deployer = get_tls_deployer(config, mail_domain)
+    tls_deployer = get_tls_deployer(config, bare_host)
 
     all_deployers = [
         ChatmailDeployer(config),
@@ -652,13 +551,13 @@ def deploy_chatmail(config_path: Path, disable_mail: bool, website_only: bool) -
         FiltermailDeployer(),
         JournaldDeployer(),
         UnboundDeployer(config),
-        TurnDeployer(mail_domain),
+        TurnDeployer(bare_host),
         IrohDeployer(config.enable_iroh_relay),
         tls_deployer,
         WebsiteDeployer(config),
         ChatmailVenvDeployer(config),
         MtastsDeployer(),
-        OpendkimDeployer(mail_domain),
+        *([] if config.ipv4_relay else [OpendkimDeployer(bare_host)]),
         # Dovecot should be started before Postfix
         # because it creates authentication socket
         # required by Postfix.

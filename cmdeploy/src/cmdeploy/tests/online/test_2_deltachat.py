@@ -1,23 +1,30 @@
 import ipaddress
+import json
 import re
 import time
 
 import imap_tools
 import pytest
 import requests
+from chatmaild.tests.test_appversions import check_appversions
 
 from cmdeploy.cmdeploy import get_sshexec
 from cmdeploy.remote import rshell
 
 
+def _login_imap(transport, ssl_context):
+    host = transport.get("imapServer")
+    if not host:
+        pytest.fail("test relay transport did not preserve its IMAP server")
+    mailbox = imap_tools.MailBox(host, ssl_context=ssl_context)
+    mailbox.login(transport["addr"], transport["password"])
+    return mailbox
+
+
 @pytest.fixture
 def imap_mailbox(cmfactory, ssl_context):
     (ac1,) = cmfactory.get_online_accounts(1)
-    user = ac1.get_config("addr")
-    password = ac1.get_config("mail_pw")
-    host = user.split("@")[1]
-    mailbox = imap_tools.MailBox(host, ssl_context=ssl_context)
-    mailbox.login(user, password)
+    mailbox = _login_imap(cmfactory.get_test_transport(ac1), ssl_context)
     mailbox.dc_ac = ac1
     return mailbox
 
@@ -51,6 +58,17 @@ class TestMetadataTokens:
         assert res == b"1111 2222"
         assert b"Getmetadata completed" in client.readline()
 
+    def test_get_appversions(self, imap_mailbox):
+        "get app version information shipped with the relay"
+        client = imap_mailbox.client
+        client.send(b'a01 GETMETADATA "" /shared/vendor/deltachat/appversions\n')
+        res = client.readline()
+        assert res[:1] == b"*"
+        res = client.readline().strip().rstrip(b")")
+        # the served value is a single line and passes the shipped file's schema
+        check_appversions(json.loads(res))
+        assert b"Getmetadata completed" in client.readline()
+
 
 class TestEndToEndDeltaChat:
     "Tests that use Delta Chat accounts on the chat mail instance."
@@ -75,7 +93,7 @@ class TestEndToEndDeltaChat:
         ac1, ac2 = cmfactory.get_online_accounts(2)
         chat = cmfactory.get_accepted_chat(ac1, ac2)
 
-        user = ac2.get_config("configured_addr")
+        user = cmfactory.get_test_transport(ac2)["addr"]
 
         def parse_size_limit(limit: str) -> int:
             """Parse a size limit and return the number of bytes as integer.
@@ -177,11 +195,7 @@ def test_hide_senders_ip_address(cmfactory, ssl_context):
 
     chat.send_text("testing submission header cleanup")
     user2.wait_for_incoming_msg()
-    addr = user2.get_config("addr")
-    host = addr.split("@")[1]
-    pw = user2.get_config("mail_pw")
-    mailbox = imap_tools.MailBox(host, ssl_context=ssl_context)
-    mailbox.login(addr, pw)
+    mailbox = _login_imap(cmfactory.get_test_transport(user2), ssl_context)
     msgs = list(mailbox.fetch(mark_seen=False))
     assert msgs, "expected at least one message"
     assert public_ip not in msgs[0].obj.as_string()

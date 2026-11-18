@@ -1,11 +1,10 @@
 from chatmaild.config import Config
-from pyinfra.operations import apt, dnf, files, systemd
 
 from cmdeploy.basedeploy import (
     Deployer,
-    get_pkg_mgr,
     get_resource,
-    is_el10,
+    package_manager,
+    platform_packages,
 )
 
 
@@ -14,7 +13,8 @@ class NginxDeployer(Deployer):
         self.config = config
 
     def install(self):
-        pkg_mgr = get_pkg_mgr()
+        manager = package_manager()
+        packages = platform_packages("nginx")
         #
         # If we allow nginx to start up on install, it will grab port
         # 80, which then will block acmetool from listening on the port.
@@ -34,93 +34,50 @@ class NginxDeployer(Deployer):
         # For documentation about policy-rc.d, see:
         # https://people.debian.org/~hmh/invokerc.d-policyrc.d-specification.txt
         #
-        if not is_el10():
-            files.put(
-                src=get_resource("policy-rc.d"),
-                dest="/usr/sbin/policy-rc.d",
-                user="root",
-                group="root",
-                mode="755",
-            )
+        self.put_executable(src="policy-rc.d", dest="/usr/sbin/policy-rc.d")
 
-        packages = ["nginx", "libnginx-mod-stream"]
-        if is_el10():
-            packages = ["nginx", "nginx-all-modules"]
-
-        pkg_mgr.packages(
+        manager.packages(
             name="Install nginx",
             packages=packages,
         )
 
-        if not is_el10():
-            files.file("/usr/sbin/policy-rc.d", present=False)
+        self.remove_file("/usr/sbin/policy-rc.d")
 
     def configure(self):
-        self.need_restart = _configure_nginx(self.config)
+        _configure_nginx(self, self.config)
 
     def activate(self):
-        systemd.service(
-            name="Start and enable nginx",
-            service="nginx.service",
-            running=True,
-            enabled=True,
-            restarted=self.need_restart,
-        )
-        self.need_restart = False
+        self.ensure_service("nginx.service")
 
 
-def _configure_nginx(config: Config, debug: bool = False) -> bool:
+def _configure_nginx(deployer, config: Config, debug: bool = False):
     """Configures nginx HTTP server."""
-    need_restart = False
 
-    main_config = files.template(
-        src=get_resource("nginx/nginx.conf.j2"),
-        dest="/etc/nginx/nginx.conf",
-        user="root",
-        group="root",
-        mode="644",
+    deployer.put_template(
+        "nginx/nginx.conf.j2",
+        "/etc/nginx/nginx.conf",
         config=config,
         disable_ipv6=config.disable_ipv6,
     )
-    need_restart |= main_config.changed
 
-    autoconfig = files.template(
-        src=get_resource("nginx/autoconfig.xml.j2"),
-        dest="/var/www/html/.well-known/autoconfig/mail/config-v1.1.xml",
-        user="root",
-        group="root",
-        mode="644",
+    deployer.put_template(
+        "nginx/autoconfig.xml.j2",
+        "/var/www/html/.well-known/autoconfig/mail/config-v1.1.xml",
         config=config,
     )
-    need_restart |= autoconfig.changed
 
-    mta_sts_config = files.template(
-        src=get_resource("nginx/mta-sts.txt.j2"),
-        dest="/var/www/html/.well-known/mta-sts.txt",
-        user="root",
-        group="root",
-        mode="644",
+    deployer.put_template(
+        "nginx/mta-sts.txt.j2",
+        "/var/www/html/.well-known/mta-sts.txt",
         config=config,
     )
-    need_restart |= mta_sts_config.changed
 
     # install CGI newemail script
     #
     cgi_dir = "/usr/lib/cgi-bin"
-    files.directory(
-        name=f"Ensure {cgi_dir} exists",
-        path=cgi_dir,
-        user="root",
-        group="root",
-    )
+    deployer.ensure_directory(cgi_dir)
 
-    files.put(
-        name="Upload cgi newemail.py script",
+    deployer.put_executable(
         src=get_resource("newemail.py", pkg="chatmaild").open("rb"),
         dest=f"{cgi_dir}/newemail.py",
-        user="root",
-        group="root",
-        mode="755",
     )
-
-    return need_restart

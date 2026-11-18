@@ -6,13 +6,13 @@ Technical overview
 Directories of the relay repository
 -----------------------------------
 
-The `chatmail relay repository <https://github.com/chatmail/relay/tree/main/>`_
+The `chatmail relay repository <https://github.com/chatmail/relay>`_
 has four main directories.
 
 ``scripts/``
 ~~~~~~~~~~~~~
 
-`scripts <https://github.com/chatmail/relay/tree/main/scripts>`_
+:repodir:`scripts`
 offers two convenience tools for beginners:
 
 - ``initenv.sh`` installs a local virtualenv Python environment and
@@ -71,7 +71,7 @@ The deployed system components of a chatmail relay are:
 ``chatmaild/``
 ~~~~~~~~~~~~~~
 
-`chatmaild <https://github.com/chatmail/relay/tree/main/chatmaild>`_
+:repodir:`chatmaild`
 is a Python package containing several small services which handle
 authentication, trigger push notifications on new messages, ensure
 that outbound mails are encrypted, delete inactive users, and some
@@ -83,25 +83,25 @@ that integrate with Dovecot and Postfix to achieve instant-onboarding
 and only relaying OpenPGP end-to-end messages encrypted messages. A
 short overview of ``chatmaild`` services:
 
--  `doveauth <https://github.com/chatmail/relay/blob/main/chatmaild/src/chatmaild/doveauth.py>`_
-   implements create-on-login address semantics and is used by Dovecot
-   during IMAP login and by Postfix during SMTP/SUBMISSION login which
-   in turn uses `Dovecot SASL
-   <https://doc.dovecot.org/2.3/configuration_manual/authentication/dict/#complete-example-for-authenticating-via-a-unix-socket>`_
-   to authenticate logins.
+-  :repofile:`doveauth <chatmaild/src/chatmaild/doveauth.py>`
+   implements create-on-login address semantics.
+   Dovecot authenticates IMAP logins, and Postfix SMTP/SUBMISSION logins through `Dovecot SASL
+   <https://doc.dovecot.org/2.3/configuration_manual/authentication/authentication_mechanisms/>`_,
+   from an :repofile:`auth.lua <cmdeploy/src/cmdeploy/dovecot/auth.lua.j2>` script
+   that reads the maildir directly. Only addresses which do not exist yet
+   are passed on to doveauth, which owns the creation policy.
 
--  `chatmail-metadata <https://github.com/chatmail/relay/blob/main/chatmaild/src/chatmaild/metadata.py>`_
-   is contacted by a `Dovecot lua
-   script <https://github.com/chatmail/relay/blob/main/cmdeploy/src/cmdeploy/dovecot/push_notification.lua>`_
-   to store user-specific relay-side config. On new messages, it `passes
-   the user’s push notification
-   token <https://github.com/chatmail/relay/blob/main/chatmaild/src/chatmaild/notifier.py>`_
+-  :repofile:`chatmail-metadata <chatmaild/src/chatmaild/metadata.py>`
+   is contacted by a
+   :repofile:`Dovecot lua script <cmdeploy/src/cmdeploy/dovecot/push_notification.lua>`
+   to store user-specific relay-side config. On new messages, it
+   :repofile:`passes the user’s push notification token <chatmaild/src/chatmaild/notifier.py>`
    to
    `notifications.delta.chat <https://delta.chat/en/help#instant-delivery>`_
    so the push notifications on the user’s phone can be triggered by
    Apple/Google/Huawei.
 
--  `chatmail-expire <https://github.com/chatmail/relay/blob/main/chatmaild/src/chatmaild/expire.py>`_
+-  :repofile:`chatmail-expire <chatmaild/src/chatmaild/expire.py>`
    deletes old messages, large messages, and entire mailboxes
    of users who have not logged in for longer than
    ``delete_inactive_users_after`` days.
@@ -109,15 +109,14 @@ short overview of ``chatmaild`` services:
 -  ``chatmail-quota-expire`` is called by Dovecot's ``quota_warning`` mechanism
    and will automatically remove oldest messages to keep mailboxes well under ``max_mailbox_size``.
 
--  `lastlogin <https://github.com/chatmail/relay/blob/main/chatmaild/src/chatmaild/lastlogin.py>`_
+-  :repofile:`lastlogin <chatmaild/src/chatmaild/lastlogin.py>`
    is contacted by Dovecot when a user logs in and stores the date of
    the login.
 
 ``www/``
 ~~~~~~~~~
 
-`www <https://github.com/chatmail/relay/tree/main/www>`_ contains
-the html, css, and markdown files which make up a chatmail relay’s
+:repodir:`www` contains the html, css, and markdown files which make up a chatmail relay’s
 web page. Edit them before deploying to make your chatmail relay
 stand out.
 
@@ -153,9 +152,11 @@ Chatmail relay dependency diagram
         autoconfig.xml --- dovecot;
         postfix --- |10080|filtermail-outgoing;
         postfix --- |10081|filtermail-incoming;
+        postfix --- |10083|filtermail-transport;
         filtermail-outgoing --- |10025 reinject|postfix;
         filtermail-incoming --- |10026 reinject|postfix;
-        dovecot --- |doveauth.socket|doveauth;
+        postfix --- |milter opendkim.sock|OpenDKIM
+        dovecot --- |10084 create|doveauth;
         dovecot --- |message delivery|maildir["maildir
         /home/vmail/.../user"];
         dovecot --- |lastlogin.socket|lastlogin;
@@ -164,6 +165,61 @@ Chatmail relay dependency diagram
         chatmail-quota-expire --- maildir;
         lastlogin --- maildir;
         doveauth --- maildir;
+        nginx-internal -. optional .-> archive-owner-portal;
+        archive-owner-portal --> archive-identity[verified Google subject];
+        archive-identity --> archive-binding[existing mailbox proof and binding];
+        archive-binding --> archive-incarnation[held mailbox incarnation];
+        archive-policy[current operator policy] -. optional delegation .-> archive-incarnation;
+        archive-incarnation --> archive-wallet[restricted wallet broker];
+        archive-wallet --> archive-operation[shared worker verify retry guard];
+        archive-operation --> archive-capture[cur/new capture and age encryption];
+        archive-binding --> archive-grant[versioned credential CAS];
+        archive-grant --> archive-wallet;
+        archive-capture --> archive-verify[Drive principal and downloaded checksum];
+        archive-verify --> archive-terminal[terminal receipt and cursor scan fence];
+        archive-terminal --> archive-quarantine[private quarantine recovery];
+        archive-capture --> archive-manifest[canonical v2 manifest];
+        archive-wallet --> archive-mac[HKDF bound manifest MAC];
+        archive-manifest --> archive-mac;
+        archive-mac --> archive-verify;
+        archive-identity --> archive-fresh-proof[fresh personal mailbox proof];
+        archive-fresh-proof --> archive-recovery-guard[recovery operation and namespace checks];
+        archive-incarnation --> archive-recovery-guard;
+        archive-recovery-guard --> archive-auth-commit[final session owner generation authorization];
+        archive-wallet --> archive-auth-commit;
+        archive-auth-commit --> archive-owner-kit[private owner recovery kit];
+        archive-terminal -. legacy v1 pins .-> archive-owner-kit;
+        archive-owner-kit --> archive-offline[standalone format authentication];
+        archive-files[downloaded encrypted Drive files] --> archive-offline;
+        archive-offline --> archive-owner-quarantine[exclusive run-ID quarantine and final completion];
+        archive-capture --> archive-audit[unresolved entries and unused artifacts];
+        archive-wallet --> archive-audit;
+        nginx-internal -. explicit pairing only .-> manager-pair-portal[fresh owner proof and browser final confirmation];
+        manager-state[Guarded encrypted state and RPC profile] --> manager-mount[Root attestation and kernel unique mount identity];
+        manager-mount --> manager-sdk[Official RPC 2.69 child];
+        manager-sdk --> manager-peer[Protected Single chat and SecureJoin key pin];
+        manager-peer --> manager-pending[Atomic peer pin and durable pending issuance];
+        manager-pending --> manager-claim[Reserved instance and exclusive claim];
+        manager-claim --> manager-issuer[One background issuance worker];
+        manager-issuer --> manager-sdk;
+        manager-issuer --> manager-register[Fresh context and atomic registration];
+        manager-register --> manager-instance[Registered outgoing Archive Manager app];
+        manager-issuer -. ambiguous outcome .-> manager-uncertain[Uncertain issuance without automatic resend];
+        manager-uncertain --> manager-reissue[Explicit offline replacement and retained history];
+        manager-reissue --> manager-claim;
+        manager-instance --> manager-ui[Packaged local Webxdc controls];
+        manager-ui --> manager-queue[SDK stable update queue];
+        manager-queue --> manager-peer;
+        manager-pair-portal --> manager-intent[Purpose leased app intent];
+        manager-intent --> manager-pair-portal;
+        manager-pair-portal --> manager-link[Explicit personal binding link];
+        manager-peer --> manager-link;
+        manager-link --> manager-facade[Revision and lease guarded archive facade];
+        manager-facade --> archive-operation;
+        manager-facade --> manager-signed[Exact byte signed outbox];
+        manager-signed --> manager-verifier[Packaged NaCl verification worker];
+        manager-verifier --> manager-ui;
+        manager-facade --> archive-audit;
         chatmail-expire-daily --- maildir;
         chatmail-fsreport-daily --- maildir;
         chatmail-metadata --- iroh-relay;
@@ -178,26 +234,51 @@ Chatmail relay dependency diagram
         style nginx-right fill:#f66;
         style postfix fill:#f66;
         style dovecot fill:#f66;
+        style OpenDKIM fill:#f66;
         style notification-proxy fill:#f66;
 
-Message between users on the same relay
----------------------------------------
+Accepting and delivering mail
+-----------------------------
 
 .. mermaid::
-    :caption: This diagram shows the path a non-federated message takes.
+    :caption: This diagram shows all the paths a message can take.
 
-    graph LR;
-        sender --> |465|smtps/smtpd;
-        sender --> |587|submission/smtpd;
-        smtps/smtpd --> |10080|filtermail;
-        submission/smtpd --> |10080|filtermail;
-        filtermail --> |10025|smtpd_reinject;
-        smtpd_reinject --> cleanup;
-        cleanup --> qmgr;
-        qmgr --> smtpd_accepts_message;
-        qmgr --> |lmtp|dovecot;
-        dovecot --> recipient;
-        dovecot --> sender's_other_devices;
+    flowchart LR
+        subgraph chatmail relay
+            subgraph postfix
+                qmgr .-> lmtp-filtermail["lmtp/lmtp-filtermail (default_transport)"]
+                qmgr .-> lmtp["lmtp (local_transport)"]
+                lmtp --> cleanup["cleanup (lmtp_header_cleanup)"]
+                bounce
+                smtpd-submission["smtpd/submission"]
+                smtpd-smtps["smtpd/smtps"]
+                smtpd-reinject-outgoing["smtpd/reinject-outgoing"] --> authclean["cleanup/authclean (submission_header_cleanup)"]
+                authclean --> qmgr
+                smtpd-smtp["smtpd/smtp"]
+                smtpd-reinject-incoming["smtpd/reinject-incoming"] --> qmgr
+            end
+            lmtp-filtermail --LMTP inet:10083--> filtermail-transport
+            cleanup --LMTP unix:private/dovecot-lmtp --> dovecot
+            dovecot --> maildir
+            smtpd-submission --SMTP inet:10080--> filtermail-outgoing
+            smtpd-smtps --SMTP inet:10080--> filtermail-outgoing
+            filtermail-outgoing --SMTP inet:10025--> smtpd-reinject-outgoing
+            open-dkim["OpenDKIM (signing only)"] <--milter unix:opendkim/opendkim.sock--> smtpd-reinject-outgoing
+            bounce <--milter unix:opendkim/opendkim.sock--> open-dkim
+            bounce --> qmgr
+            nginx
+            smtpd-smtp -.SMTP inet:10081.-> filtermail-incoming
+            nginx -.HTTP inet:10082.-> filtermail-incoming
+            filtermail-incoming --SMTP inet:10026--> smtpd-reinject-incoming
+        end
+        filtermail-transport -.SMTP inet:25.-> mta1[Remote relay]
+        filtermail-transport -.HTTPS /mxdeliv.-> mta1
+        client[Client] -.SMTP inet:587.-> smtpd-submission
+        client -.SMTP inet:465.-> smtpd-smtps
+        client -.SMTP inet:443.-> nginx
+        nginx -.SMTP inet:465.-> smtpd-smtps
+        mta2[Remote relay] -.SMTP inet:25.-> smtpd-smtp
+        mta2 -.HTTPS /mxdeliv.-> nginx
 
 Operational details of a chatmail relay
 ----------------------------------------
@@ -221,6 +302,33 @@ Fresh chatmail addresses have a mailbox directory that contains:
    state. If the address is only used by one device, the Maildir
    directories will typically be empty unless the user of that address
    hasn’t been online for a while.
+
+App version information (experimental)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A chatmail relay ships the
+:repofile:`appversions.json <chatmaild/src/chatmaild/defaults/appversions.json>`
+file of the ``chatmaild`` package
+and serves its content under the IMAP METADATA key
+``/shared/vendor/deltachat/appversions``.
+Chat apps installed outside of app stores read this key
+to learn about updates and where to download them.
+The mechanism is experimental and may change.
+
+The file travels with the normal deploy:
+update the repository checkout and run ``cmdeploy run``.
+Local modifications of ``appversions.json`` are deployed as-is,
+so you can serve your own app version information,
+including links to app downloads.
+There is no automatic refresh:
+version information changes only when you deploy again.
+
+.. note::
+
+   Note that as of August 2026, only Delta Chat Android Google Play version
+   is beginning to support discovering app versions from relays.
+   Generally, consumers of relay-provided app version information
+   need to verify themselves that downloaded app files are valid.
 
 Active ports
 ~~~~~~~~~~~~
@@ -264,7 +372,8 @@ from the chatmail relay server.
 Email domain authentication (DKIM)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Chatmail relays enforce :rfc:`DKIM <6376>` to authenticate incoming emails.
+Chatmail relays enforce :rfc:`DKIM <6376>` to authenticate incoming emails
+(except for :ref:`IP-only relays <iponly>`).
 Incoming emails must have a valid DKIM signature with
 Signing Domain Identifier (SDID, ``d=`` parameter in the DKIM-Signature
 header) equal to the ``From:`` header domain. This property is checked
@@ -295,9 +404,7 @@ ensured by ``filtermail`` proxy.
 TLS requirements
 ~~~~~~~~~~~~~~~~
 
-Postfix is configured to require valid TLS by setting
-`smtp_tls_security_level <https://www.postfix.org/postconf.5.html#smtp_tls_security_level>`_
-to ``verify``.
+Filtermail (used for delivery) requires a valid TLS.
 
 You can test it by resolving ``MX`` records of your relay domain and
 then connecting to MX relays (e.g ``mx.example.org``) with
@@ -338,6 +445,35 @@ and run with self-signed certificates.
 
 Architecture of cmdeploy
 ------------------------
+
+The optional encrypted archive surface and its setup boundary are documented
+in :doc:`drive-archive`. It is not registered for automatic deployment.
+The optional :doc:`archive-manager` adds a service conversation and locally
+packaged Webxdc controls in ordinary supported Delta Chat clients. Its stable
+update queue reaches the existing owner facade and background worker through
+protected-chat, key-pin, app-instance, personal-link and purpose-lease checks.
+Completed SecureJoin events create durable issuance work. One background worker
+uses the existing supervised core, then commits app registration and the issued
+outcome together. Interrupted claims remain uncertain until explicit recovery;
+profile ownership prevents an offline issuance command from opening a second
+core beside the daemon. Issuance state counts and pending age use the existing
+metrics surface, and replacement history remains in the existing audit path.
+Browser pairing/Google consent and private recovery remain separate handoffs.
+Only the packaged verification worker can promote a signed response to current
+UI state; stale history and messaging acceptance are not committed outcomes.
+Personal owners may privately retain an exported recovery kit and recover
+downloaded message archives using standalone Python and age tooling, without
+the operator's running relay, database or wallet. The operator still retains
+the archive keys. Later authenticated v2 uploads under the same binding/key
+remain recoverable with that kit, including after ordinary consent renewal;
+real key rotation requires another export. Export authorization and offline
+archive authentication are separate trust boundaries. Neither a completed
+download nor a valid restored capture window proves private retention, newest
+history or a complete mailbox snapshot.
+The downstream :doc:`runtime-maintenance` path connects primary advisory and
+release facts to the runtime lock and source/binary checks, then private
+candidate builds and offline authentication/notification tests before explicit
+promotion.
 
 cmdeploy is a Python program that uses the pyinfra library to deploy
 chatmail relays, with all the necessary software, configuration, and

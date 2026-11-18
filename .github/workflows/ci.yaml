@@ -1,13 +1,16 @@
-name: Run unit-tests and container-based deploy+test verification
+name: CI
 
 on:
   # Triggers when a PR is merged into main or a direct push occurs
   push:
     branches: [ "main" ]
     
-  # Triggers for any PR (and its subsequent commits) targeting the main branch
+  # Review the maintained Alma branch as well as the default branch.
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "el10-support" ]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
 
 # Newest push wins: Prevents multiple runs from clashing and wasting runner efforts
 concurrency:
@@ -17,6 +20,7 @@ concurrency:
 
 jobs:
   tox:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: isolated chatmaild tests
     runs-on: ubuntu-latest
     steps:
@@ -25,19 +29,29 @@ jobs:
         # Otherwise `test_deployed_state` will be unhappy.
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
       - name: download filtermail
-        run: curl -L https://github.com/chatmail/filtermail/releases/download/v0.6.1/filtermail-x86_64 -o /usr/local/bin/filtermail && chmod +x /usr/local/bin/filtermail
+        run: curl -L https://github.com/chatmail/filtermail/releases/download/v0.7.7/filtermail-x86_64 -o /usr/local/bin/filtermail && chmod +x /usr/local/bin/filtermail
       - name: run chatmaild tests 
         working-directory: chatmaild
-        run: pipx run tox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y age
+          # Synthetic Manager state must be in RAM under /tmp.
+          test_tmp=$(mktemp -d /tmp/chatmaild-tests.XXXXXXXX)
+          sudo mount -t tmpfs -o "size=2G,nosuid,nodev,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$test_tmp"
+          trap 'sudo umount "$test_tmp" && rmdir "$test_tmp"' EXIT
+          pipx run tox -- --basetemp="$test_tmp/pytest"
 
   scripts:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: deploy-chatmail tests 
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - name: initenv 
         run: scripts/initenv.sh
@@ -52,9 +66,11 @@ jobs:
         run: pytest --pyargs cmdeploy 
 
   lxc-test:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: LXC deploy and test
-    uses: chatmail/cmlxc/.github/workflows/lxc-test.yml@v0.10.0
+    uses: chatmail/cmlxc/.github/workflows/lxc-test.yml@main
     with:
+      cmlxc_version: main
       cmlxc_commands: |
         cmlxc init 
         # single cmdeploy relay test
@@ -71,3 +87,4 @@ jobs:
         cmlxc -v test-cmdeploy cm0 mad0
         cmlxc -v test-mini cm0 mad0
         cmlxc -v test-mini mad0 cm0
+

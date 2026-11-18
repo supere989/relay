@@ -10,6 +10,8 @@ on:
       - 'scripts/build-docs.sh'
       - '.github/workflows/docs.yaml'
 
+permissions: {}
+
 jobs:
   scripts:
     name: build 
@@ -19,6 +21,8 @@ jobs:
       url: https://chatmail.at/doc/relay/
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: initenv 
         run: scripts/initenv.sh
@@ -43,5 +47,5 @@ jobs:
           mkdir -p "$HOME/.ssh"
           echo "${{ secrets.CHATMAIL_STAGING_SSHKEY }}" > "$HOME/.ssh/key"
           chmod 600 "$HOME/.ssh/key"
-          rsync -rILvh -e "ssh -i $HOME/.ssh/key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/doc/build/ "${{ secrets.USERNAME }}@chatmail.at:/var/www/html/chatmail.at/doc/relay/"
+          rsync -rILvh -e "ssh -i $HOME/.ssh/key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/doc/build/ "${{ secrets.USERNAME }}@chatmail.at:"
 

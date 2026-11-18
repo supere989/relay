@@ -2,20 +2,28 @@ name: documentation preview
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'doc/**'
       - 'scripts/build-docs.sh'
       - '.github/workflows/docs-preview.yaml'
 
+permissions: {}
+
 jobs:
   scripts:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: build 
     runs-on: ubuntu-latest
-    environment:
-      name: 'staging.chatmail.at/doc/relay/'
-      url: https://staging.chatmail.at/doc/relay/${{ steps.prepare.outputs.prid }}
+    env:
+      # Pin the repository links in the docs to this pull request's head commit
+      # so that linkcheck resolves files which only exist on the branch so far.
+      # see doc/conf.py
+      DOC_GITHUB_REF: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: initenv 
         run: scripts/initenv.sh
@@ -30,22 +38,6 @@ jobs:
       - name: build documentation second time (for TOC)
         working-directory: doc
         run: sphinx-build source build
-
-      - name: Get Pullrequest ID
-        id: prepare
-        run: |
-          export PULLREQUEST_ID=$(echo "${{ github.ref }}" | cut -d "/" -f3)
-          echo "prid=$PULLREQUEST_ID" >> $GITHUB_OUTPUT
-          if [ $(expr length "${{ secrets.USERNAME }}") -gt "1" ]; then echo "uploadtoserver=true" >> $GITHUB_OUTPUT; fi
-      - run: |
-          echo "baseurl: /${{ steps.prepare.outputs.prid }}" >> _config.yml
-
-      - name: Upload preview
-        run: |
-          mkdir -p "$HOME/.ssh"
-          echo "${{ secrets.CHATMAIL_STAGING_SSHKEY }}" > "$HOME/.ssh/key"
-          chmod 600 "$HOME/.ssh/key"
-          rsync -rILvh -e "ssh -i $HOME/.ssh/key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/doc/build/ "${{ secrets.USERNAME }}@chatmail.at:/var/www/html/staging.chatmail.at/doc/relay/${{ steps.prepare.outputs.prid }}/"
 
       - name: check links 
         working-directory: doc

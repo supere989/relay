@@ -1,0 +1,25 @@
+{
+  "name": "tweetnacl",
+  "version": "1.0.3",
+  "license": "Unlicense",
+  "checked_at": "2026-11-17",
+  "repository": "https://github.com/dchest/tweetnacl-js",
+  "tag": "1.0.3",
+  "commit": "5bf1ff5fa15e89ae249401b0d5aa54c5c5955041",
+  "npm_metadata_url": "https://registry.npmjs.org/tweetnacl/1.0.3",
+  "npm_tarball_url": "https://registry.npmjs.org/tweetnacl/-/tweetnacl-1.0.3.tgz",
+  "npm_integrity": "sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==",
+  "npm_sha1": "ac0af71680458d8a6378d0d0d050ab1407d35596",
+  "tarball_sha256": "5f8dc49cb4483e206ba3ebb22abbccfc0218c59b60fc78cce24197ced5b9e102",
+  "verification": "Npm SHA512 integrity and SHA1 verified; both unmodified members matched official GitHub tag bytes and commit.",
+  "files": {
+    "nacl-fast.min.js": {
+      "url": "https://raw.githubusercontent.com/dchest/tweetnacl-js/1.0.3/nacl-fast.min.js",
+      "sha256": "3ec535c004aeeb225785d8e93fb33bf99f52e399bd7dfc01969b5629baea5131"
+    },
+    "LICENSE": {
+      "url": "https://raw.githubusercontent.com/dchest/tweetnacl-js/1.0.3/LICENSE",
+      "sha256": "88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd"
+    }
+  }
+}

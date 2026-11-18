@@ -1,0 +1,157 @@
+dovecot_config_version = 2.4.5
+# Required for the keyed thread-index fix. A 2.4.0 storage setting retains the
+# vulnerable old index representation even with the newer executable.
+dovecot_storage_version = 2.4.5
+
+base_dir = {{ runtime.run_dir }}
+state_dir = {{ runtime.state_dir }}
+instance_name = chatmail-dovecot-2.4.5
+listen = {{ runtime.listen_address }}
+protocols {
+  imap = yes
+  lmtp = yes
+}
+auth_mechanisms = plain
+auth_allow_cleartext = no
+auth_username_chars = abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890.-_@[]
+default_client_limit = 20000
+mail_driver = maildir
+mail_path = {{ config.mailboxes_dir }}/%{user}
+mail_uid = {{ runtime.mail_user }}
+mail_gid = {{ runtime.mail_group }}
+first_valid_uid = 1000
+mail_privileged_group = {{ runtime.mail_group }}
+imap_capability {
+  XDELTAPUSH = yes
+  XCHATMAIL = yes
+}
+mail_server_admin = mailto:root@{{ config.mail_domain }}
+mail_server_comment = Chatmail server
+
+passdb passwd-file {
+  passwd_file_path = {{ runtime.standard_users }}
+}
+passdb lua {
+  lua_file = {{ runtime.config_dir }}/auth.lua
+  use_worker = yes
+}
+userdb passwd-file {
+  passwd_file_path = {{ runtime.standard_users }}
+  fields {
+    uid:default = {{ runtime.mail_user }}
+    gid:default = {{ runtime.mail_group }}
+    home:default = {{ config.mailboxes_dir }}/%{user}
+  }
+}
+userdb lua {
+  lua_file = {{ runtime.config_dir }}/auth.lua
+  use_worker = yes
+}
+
+mail_plugins {
+  mail_compress = yes
+  quota = yes
+}
+mail_compress_write_method = gz
+compress_gz_level = 6
+compress_deflate_level = 6
+quota_mail_size = 31457280
+quota "User quota" {
+  driver = maildir
+  storage_size = 1000M
+  storage_grace = 0
+}
+
+mail_attribute {
+  dict proxy {
+    name = metadata
+    socket_path = {{ runtime.metadata_socket }}
+  }
+}
+last_login {
+  dict proxy {
+    name = lastlogin
+    socket_path = {{ runtime.lastlogin_socket }}
+  }
+  precision = s
+}
+namespace inbox {
+  inbox = yes
+  mailbox Drafts {
+    special_use = \Drafts
+  }
+  mailbox Junk {
+    special_use = \Junk
+  }
+  mailbox Sent {
+    special_use = \Sent
+  }
+  mailbox "Sent Messages" {
+    special_use = \Sent
+  }
+  mailbox Trash {
+    special_use = \Trash
+  }
+}
+protocol imap {
+  imap_metadata = yes
+  mail_plugins {
+    imap_quota = yes
+    last_login = yes
+  }
+}
+protocol lmtp {
+  mail_plugins {
+    mail_lua = yes
+    notify = yes
+    push_notification = yes
+    push_notification_lua = yes
+  }
+}
+push_notification lua {
+  lua_file = {{ runtime.config_dir }}/push_notification.lua
+}
+
+ssl = required
+ssl_server_cert_file = {{ runtime.ssl_cert }}
+ssl_server_key_file = {{ runtime.ssl_key }}
+ssl_min_protocol = TLSv1.3
+service auth-worker {
+  user = {{ runtime.mail_user }}
+}
+service auth {
+  # Both passwd-file auth and the vmail Lua worker need read access to the
+  # root-owned standard-users policy, whose mode is 0640 and group is vmail.
+  group = {{ runtime.mail_group }}
+  unix_listener {{ runtime.auth_socket }} {
+    mode = 0660
+    user = {{ runtime.postfix_user }}
+    group = {{ runtime.postfix_group }}
+  }
+  unix_listener auth-userdb {
+    mode = 0777
+  }
+}
+service imap-login {
+  process_limit = 10000
+  process_min_avail = 10
+  restart_request_count = 1
+  inet_listener imap {
+    port = 0
+  }
+  inet_listener imaps {
+    port = {{ runtime.imaps_port }}
+    ssl = yes
+  }
+}
+service imap {
+  process_limit = 50000
+}
+service lmtp {
+  user = {{ runtime.mail_user }}
+  unix_listener {{ runtime.lmtp_socket }} {
+    mode = 0600
+    user = {{ runtime.postfix_user }}
+    group = {{ runtime.postfix_group }}
+  }
+}

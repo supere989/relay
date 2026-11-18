@@ -27,6 +27,7 @@ to also write legacy metrics.py style output (default: /var/www/html/metrics):
 
 import os
 import tempfile
+import time
 from argparse import ArgumentParser
 from datetime import datetime
 
@@ -49,7 +50,8 @@ def HSize(size: int):
 
 
 class Report:
-    def __init__(self, now, min_login_age, mdir):
+    def __init__(self, now, min_login_age, mdir, archive_metrics=None):
+        self.archive_metrics = archive_metrics or {}
         self.size_extra = 0
         self.size_messages = 0
         self.now = now
@@ -187,6 +189,12 @@ class Report:
         for days, active in self.login_buckets.items():
             lines.append(f'chatmail_accounts_active{{days="{days}"}} {active}')
 
+        # Reuse the existing status surface; only aggregate opaque reason/state
+        # counters are exposed, never mailbox, subject or credential labels.
+        for name, value in sorted(self.archive_metrics.items()):
+            if name.replace("_", "").isalnum() and isinstance(value, (int, float)):
+                lines.append(f"chatmail_archive_{name} {value}")
+
         self._write_atomic(filepath, "\n".join(lines) + "\n")
 
     def dump_compat_textfile(self, filepath):
@@ -259,17 +267,45 @@ def main(args=None):
         default=None,
         help="write legacy metrics.py textfile (default: /var/www/html/metrics)",
     )
+    parser.add_argument(
+        "--archive-database",
+        default=None,
+        help="Include aggregate optional archive metrics from this existing SQLite ledger",
+    )
+    parser.add_argument(
+        "--archive-config",
+        help="Guarded optional archive configuration; required for Manager/shared encrypted state",
+    )
 
     args = parser.parse_args(args)
 
     config = read_config(args.chatmail_ini)
 
-    now = datetime.utcnow().timestamp()
+    now = time.time()
     if args.days:
         now = now - 86400 * int(args.days)
 
     maxnum = int(args.maxnum) if args.maxnum else None
-    rep = Report(now=now, min_login_age=int(args.min_login_age), mdir=args.mdir)
+    archive_metrics = {}
+    if args.archive_database and args.archive_config:
+        parser.error("select archive-config or a legacy archive-database snapshot")
+    if args.archive_config:
+        from chatmaild.backup.cli import load
+
+        _archive_config, archive_store, _credentials = load(args.archive_config)
+        archive_metrics = archive_store.metrics()
+    elif args.archive_database:
+        from chatmaild.backup.store import Store
+
+        if not os.path.isfile(args.archive_database):
+            parser.error("archive database must already exist")
+        archive_metrics = Store.metrics_readonly(args.archive_database)
+    rep = Report(
+        now=now,
+        min_login_age=int(args.min_login_age),
+        mdir=args.mdir,
+        archive_metrics=archive_metrics,
+    )
     for mbox in iter_mailboxes(str(config.mailboxes_dir), maxnum=maxnum):
         rep.process_mailbox_stat(mbox)
     if args.textfile:

@@ -1,4 +1,5 @@
 import io
+import json
 import time
 
 import pytest
@@ -7,6 +8,7 @@ import requests
 from chatmaild.metadata import (
     Metadata,
     MetadataDictProxy,
+    read_appversions,
 )
 from chatmaild.notifier import (
     Notifier,
@@ -324,7 +326,7 @@ def test_turn_credentials_exception_returns_N(notifier, metadata, monkeypatch):
         turn_hostname="turn.example.org",
     )
 
-    def mock_turn_credentials():
+    def mock_turn_credentials(turn_socket_path):
         raise ConnectionRefusedError("socket not available")
 
     monkeypatch.setattr(chatmaild.metadata, "turn_credentials", mock_turn_credentials)
@@ -348,7 +350,9 @@ def test_turn_credentials_success(notifier, metadata, monkeypatch):
         turn_hostname="turn.example.org",
     )
 
-    monkeypatch.setattr(chatmaild.metadata, "turn_credentials", lambda: "user:pass")
+    monkeypatch.setattr(
+        chatmaild.metadata, "turn_credentials", lambda path: "user:pass"
+    )
 
     transactions = {}
     res = dictproxy.handle_dovecot_request(
@@ -360,15 +364,65 @@ def test_turn_credentials_success(notifier, metadata, monkeypatch):
 
 
 def test_iroh_relay(dictproxy):
-    rfile = io.BytesIO(
-        b"\n".join(
-            [
-                b"H",
-                b"Lshared/0123/vendor/vendor.dovecot/pvt/server/vendor/deltachat/irohrelay\tuser@example.org",
-            ]
-        )
-    )
-    wfile = io.BytesIO()
+    key = b"Lshared/0123/vendor/vendor.dovecot/pvt/server/vendor/deltachat/irohrelay\tuser@example.org"
+    rfile, wfile = io.BytesIO(b"H\n" + key), io.BytesIO()
     dictproxy.iroh_relay = "https://example.org/"
     dictproxy.loop_forever(rfile, wfile)
     assert wfile.getvalue() == b"Ohttps://example.org/\n"
+
+
+def test_read_appversions(tmp_path):
+    path = tmp_path.joinpath("appversions.json")
+    assert read_appversions(path) is None
+
+    path.write_text('{\n  "clients": []\n}')
+    assert read_appversions(path) == '{"clients":[]}'
+
+    # the value travels as a single dict protocol line
+    path.write_text('{"clients": [{"clientId": "one\\ntwo"}]}')
+    assert read_appversions(path) == '{"clients":[{"clientId":"one\\ntwo"}]}'
+
+    path.write_text("bad json")
+    assert read_appversions(path) is None
+
+
+def test_appversions_lookup(dictproxy):
+    # the version information shipped with chatmaild is served as a single line
+    key = b"Lshared/0123/vendor/vendor.dovecot/pvt/server/vendor/deltachat/appversions"
+    key += b"\tuser@example.org"
+    rfile, wfile = io.BytesIO(b"H\n" + key), io.BytesIO()
+    dictproxy.loop_forever(rfile, wfile)
+    value = wfile.getvalue()
+    assert value.startswith(b"O") and value.endswith(b"\n")
+    assert json.loads(value[1:])["clients"]
+
+
+def test_legacy_token_migration(metadata, testaddr):
+    with metadata.get_metadata_dict(testaddr).modify() as data:
+        data[metadata.DEVICETOKEN_KEY] = ["oldtoken1", "oldtoken2"]
+
+    assert metadata.get_tokens_for_addr(testaddr) == ["oldtoken1", "oldtoken2"]
+    mdict = metadata.get_metadata_dict(testaddr).read()
+    tokens = mdict[metadata.DEVICETOKEN_KEY]
+    assert isinstance(tokens, dict)
+    assert "oldtoken1" in tokens and "oldtoken2" in tokens
+
+
+@pytest.mark.parametrize(
+    "suffix, expected",
+    [
+        (b"vendor/deltachat/maxsmtprecipients", b"O1000\n"),
+        (b"wrong/prefix/key", b"N\n"),
+        (b"vendor/deltachat/unknown", b"N\n"),
+    ],
+    ids=["maxsmtprecipients", "prefix_mismatch", "unknown_name"],
+)
+def test_shared_lookup(dictproxy, suffix, expected):
+    key = (
+        b"Lshared/0123/vendor/vendor.dovecot/pvt/server/"
+        + suffix
+        + b"\tuser@example.org"
+    )
+    rfile, wfile = io.BytesIO(b"H\n" + key), io.BytesIO()
+    dictproxy.loop_forever(rfile, wfile)
+    assert wfile.getvalue() == expected
